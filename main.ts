@@ -1,10 +1,10 @@
-// Token Radar, radar-2 entry (Node 22, standard library only).
+// Token Radar, radar-3 entry (Node 22, standard library only).
 //
 // main.ts reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores
-// every pre-token protocol with the calibrated model in lib/model.ts, writes the ranked board to
-// /output/board.json, writes the dashboard's data beside the page as data.js, copies this
-// repository's dashboard/ and screenshots/ to /output, and writes /output/dossier.json with the
-// vendored make.fun library, so the judge reads exactly what the scorer checks.
+// every rankable pre-token protocol with the fitted curve in lib/model.ts, writes the ranked
+// board to /output/board.json, writes the dashboard's data beside the page as data.js, copies
+// this repository's dashboard/ and screenshots/ to /output, and writes /output/dossier.json
+// with the vendored make.fun library, so the judge reads exactly what the scorer checks.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
@@ -131,7 +131,8 @@ function checkScreenshots(shots: string[], outDir: string): void {
   const topMix = radar.concentration[0];
   process.stdout.write(
     `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
-      `token radar: model ${radar.model_version}, calibrated on ${radar.calibration.live_protocols} live protocols: global median market-cap/TVL ${radar.calibration.global_median.toFixed(3)}, top multiple ${radar.calibration.categories[0]?.category} ${radar.calibration.categories[0]?.multiple.toFixed(3)}\n` +
+      `token radar: model ${radar.model_version}, fitted on ${radar.fit.n} comparables: log10(mcap) = ${radar.fit.intercept.toFixed(3)} + ${radar.fit.elasticity.toFixed(3)} x log10(TVL), R2 ${radar.fit.r2.toFixed(3)}, band x${radar.fit.band_lo.toFixed(2)}-x${radar.fit.band_hi.toFixed(2)}\n` +
+      `token radar: ${radar.backtest.folds}-fold cross-check on ${radar.backtest.n} priced protocols: median error ${radar.backtest.median_abs_pct_error.toFixed(1)}%, within 2x ${(radar.backtest.within_2x * 100).toFixed(1)}%\n` +
       (topMix === undefined
         ? ''
         : `token radar: top-ten concentration: ${topMix.category} holds ${topMix.top10_rows} of the top ten\n`) +

@@ -52,11 +52,16 @@ const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 })
 const base = `file://${join(renderDir, 'dashboard', 'index.html')}`;
 
 // One screenshot: wait for the board to render instead of a fixed sleep, so a slow first paint
-// still lands, then let the page settle before the capture.
-async function shot(url, file) {
+// still lands, then let the page settle before the capture. A scroll selector moves the view
+// to that element first, so a filtered shot shows the filter and the rows it leaves.
+async function shot(url, file, scrollTo) {
   await page.goto(url, { waitUntil: 'load' });
   await page.waitForSelector('#board .shell', { timeout: 10_000 });
   await page.waitForTimeout(300);
+  if (scrollTo) {
+    await page.locator(scrollTo).first().scrollIntoViewIfNeeded();
+    await page.waitForTimeout(200);
+  }
   await page.screenshot({ path: file });
   const bytes = statSync(file).size;
   process.stdout.write(`shots: ${file} ${bytes} bytes\n`);
@@ -68,7 +73,7 @@ const rank1 = radar.rows[0].slug;
 try {
   await shot(base, join(shotsDir, '1-board.png'));
   await shot(`${base}#p=${encodeURIComponent(rank1)}`, join(shotsDir, '2-detail.png'));
-  await shot(`${base}#category=Lending`, join(shotsDir, '3-filtered.png'));
+  await shot(`${base}#category=Lending`, join(shotsDir, '3-filtered.png'), '.controls');
 } finally {
   // The browser closes even when a shot fails, so a bad capture never leaves a stray process.
   await browser.close();
