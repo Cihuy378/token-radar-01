@@ -42,23 +42,25 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-const inputArg = arg('input', '/input');
-const inputFile = inputArg.endsWith('.json') ? inputArg : join(inputArg, 'snapshot.json');
-if (!existsSync(inputFile)) {
-  fail(`no snapshot at ${inputFile}: pass --input <snapshot.json|directory> or mount the sealed /input`);
-}
-const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
+/** The whole run, as one function, so the entrypoint stays a short call at the bottom. */
+function run(): void {
+  const inputLocation = arg('input', '/input');
+  const inputPath = inputLocation.endsWith('.json') ? inputLocation : join(inputLocation, 'snapshot.json');
+  if (!existsSync(inputPath)) {
+    fail(`no snapshot at ${inputPath}: pass --input <snapshot.json|directory> or mount the sealed /input`);
+  }
+  const outDir = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
-const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
-const { board, radar } = buildRadar(snapshot);
-const issue = boardIssue(board, snapshot);
-if (issue !== null) {
-  fail(`the model wrote a board the gate refuses: ${issue}`);
-}
+  const snapshot = parseSnapshot(readFileSync(inputPath, 'utf8'));
+  const { board, radar } = buildRadar(snapshot);
+  const issue = boardIssue(board, snapshot);
+  if (issue !== null) {
+    fail(`the model wrote a board the gate refuses: ${issue}`);
+  }
 
-mkdirSync(out, { recursive: true });
-writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
-writeFileSync(join(out, 'data.js'), dataScript(radar));
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(join(outDir, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
+  writeFileSync(join(outDir, 'data.js'), dataScript(radar));
 
 /** Copy one directory's regular files into `to`, skipping names that start with a dot. */
 function copyFiles(from: string, to: string): string[] {
@@ -117,21 +119,24 @@ function checkScreenshots(shots: string[], outDir: string): void {
   }
 }
 
-const dashboardFiles = copyFiles(join(here, 'dashboard'), join(out, 'dashboard'));
-const dashboardBytes = checkDashboard(dashboardFiles, out);
+  const dashboardNames = copyFiles(join(here, 'dashboard'), join(outDir, 'dashboard'));
+  const dashboardSize = checkDashboard(dashboardNames, outDir);
 
-const shots = copyFiles(join(here, 'screenshots'), join(out, 'screenshots'));
-checkScreenshots(shots, out);
+  const shotNames = copyFiles(join(here, 'screenshots'), join(outDir, 'screenshots'));
+  checkScreenshots(shotNames, outDir);
 
-// The dossier is written last: the scorer rebuilds it from this /output and compares bytes.
-writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
+  // The dossier is written last: the scorer rebuilds it from this /output and compares bytes.
+  writeFileSync(join(outDir, 'dossier.json'), buildDossier(outDir, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
 
-const topMix = radar.concentration[0];
-process.stdout.write(
-  `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
-    `token radar: model ${radar.model_version}, calibrated on ${radar.calibration.live_protocols} live protocols: global median market-cap/TVL ${radar.calibration.global_median.toFixed(3)}, top multiple ${radar.calibration.categories[0]?.category} ${radar.calibration.categories[0]?.multiple.toFixed(3)}\n` +
-    (topMix === undefined
-      ? ''
-      : `token radar: top-ten concentration: ${topMix.category} holds ${topMix.top10_rows} of the top ten\n`) +
-    `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dashboardFiles.length} files, ${dashboardBytes} bytes), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
-);
+  const topMix = radar.concentration[0];
+  process.stdout.write(
+    `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
+      `token radar: model ${radar.model_version}, calibrated on ${radar.calibration.live_protocols} live protocols: global median market-cap/TVL ${radar.calibration.global_median.toFixed(3)}, top multiple ${radar.calibration.categories[0]?.category} ${radar.calibration.categories[0]?.multiple.toFixed(3)}\n` +
+      (topMix === undefined
+        ? ''
+        : `token radar: top-ten concentration: ${topMix.category} holds ${topMix.top10_rows} of the top ten\n`) +
+      `token radar: wrote ${join(outDir, 'board.json')}, ${join(outDir, 'data.js')}, ${join(outDir, 'dashboard')} (${dashboardNames.length} files, ${dashboardSize} bytes), ${join(outDir, 'screenshots')} (${shotNames.length} images) and ${join(outDir, 'dossier.json')}\n`,
+  );
+}
+
+run();

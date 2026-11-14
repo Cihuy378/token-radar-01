@@ -125,6 +125,25 @@ tbody tr.top1 td:first-child { color: var(--gold); }
 .status.live::before { background: var(--gold); }
 .chip { display: inline-block; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--muted); font-family: var(--font-num); }
 
+/* Comparison: two protocols side by side, the leader of each factor lit up. */
+.compare { margin-top: var(--s4); padding: var(--s5); display: grid; gap: var(--s3); }
+.compare-head { display: flex; align-items: start; justify-content: space-between; gap: var(--s4); }
+.compare-head h2 { font-size: 22px; }
+.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s5); }
+.compare-col { display: grid; gap: var(--s3); align-content: start; min-width: 0; }
+.compare-col > h3 { font-size: 17px; }
+.compare-factors { display: grid; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.compare-factor { display: flex; justify-content: space-between; gap: var(--s3); padding: 6px var(--s3); font-size: 13px; border-bottom: 1px solid var(--border); }
+.compare-factor:last-child { border-bottom: 0; }
+.compare-factor span { color: var(--muted); }
+.compare-factor.leads { background: #1b2b1f; }
+.compare-factor.leads b { color: var(--accent); }
+.compare-factor.leads span { color: var(--ink); }
+.compare-toggle { margin-left: var(--s2); padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.compare-toggle:hover { border-color: var(--accent-dim); color: var(--ink); }
+.compare-toggle[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #0b100d; font-weight: 600; }
+.compare-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* Model panel + calibration table. */
 .model { margin-top: var(--s4); padding: var(--s5); display: grid; gap: var(--s3); }
 .formula { font-family: var(--font-num); font-size: 13px; line-height: 1.7; color: var(--muted); overflow-wrap: anywhere; background: var(--canvas); border: 1px solid var(--border); border-radius: 8px; padding: var(--s3) var(--s4); }
@@ -175,6 +194,8 @@ tbody tr.top1 td:first-child { color: var(--gold); }
   /* On a narrow screen the strip scrolls sideways instead of stacking into a tall column. */
   .top10 { flex-wrap: nowrap; overflow-x: auto; padding-bottom: var(--s2); }
   .top10-chip { flex: none; }
+  /* A comparison stacks its two columns on a narrow screen, like the top three do. */
+  .compare-grid { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }

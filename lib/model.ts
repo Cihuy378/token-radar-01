@@ -450,6 +450,50 @@ export function topConcentration(board: BoardRow[]): ConcentrationRow[] {
     .sort((a, b) => b.top10_rows - a.top10_rows || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
 }
 
+/** One line of a side-by-side comparison: the same factor measured for two protocols. */
+export interface CompareEntry {
+  key: string;
+  label: string;
+  first: number;
+  second: number;
+}
+
+/** Which side of a compared factor leads, or a tie when the two numbers match. */
+export type CompareLeader = 'first' | 'second' | 'tie';
+
+/** The leading side of one compared factor: the larger number leads, ties stay tied. */
+export function compareLeader(entry: CompareEntry): CompareLeader {
+  if (entry.first === entry.second) return 'tie';
+  return entry.first > entry.second ? 'first' : 'second';
+}
+
+/** How much larger the leading implied value is, as a share of the smaller one. */
+export function compareGap(first: number, second: number): number {
+  const smaller = Math.min(first, second);
+  if (smaller <= 0) return 0;
+  return (Math.max(first, second) - smaller) / smaller;
+}
+
+/**
+ * Two board rows side by side: every factor the model scores, in the order the detail
+ * drawer shows them, ending with the implied values themselves. A missing growth
+ * reading counts as zero and a missing age counts as a year, the same fallbacks the
+ * scorer uses, so a comparison never disagrees with a detail view. The dashboard
+ * mirrors this list in its own code for the rows it renders.
+ */
+export function compareBoardRows(first: BoardRow, second: BoardRow): CompareEntry[] {
+  return [
+    { key: 'tvl', label: 'Total value locked', first: first.tvl_usd, second: second.tvl_usd },
+    { key: 'growth', label: 'Seven-day TVL change', first: first.change_7d ?? 0, second: second.change_7d ?? 0 },
+    { key: 'age', label: 'Days with no token on record', first: first.age_days ?? 365, second: second.age_days ?? 365 },
+    { key: 'multiple', label: 'Category multiple', first: first.model.category_multiple, second: second.model.category_multiple },
+    { key: 'growthMult', label: 'Growth multiplier', first: first.model.growth_multiplier, second: second.model.growth_multiplier },
+    { key: 'maturityMult', label: 'Maturity multiplier', first: first.model.maturity_multiplier, second: second.model.maturity_multiplier },
+    { key: 'breadthMult', label: 'Breadth multiplier', first: first.model.breadth_multiplier, second: second.model.breadth_multiplier },
+    { key: 'implied', label: 'Implied value', first: first.implied_value_usd, second: second.implied_value_usd },
+  ];
+}
+
 /** A step as one string: its action, then its cost and time, within the gate's 20..600 characters. */
 export function stepText(step: FarmStep): string {
   let s = `${step.text} Cost: ${step.cost}. Time: ${step.time}.`;

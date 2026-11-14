@@ -9,7 +9,7 @@
   var DATA = window.RADAR;
   if (!DATA) return;
   var app = document.getElementById('board');
-  var state = { q: '', category: 'all', chain: 'all', tab: 'pre-token', sort: 'implied', dir: -1, selected: null };
+  var state = { q: '', category: 'all', chain: 'all', tab: 'pre-token', sort: 'implied', dir: -1, selected: null, compare: [] };
 
   var usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
   function fmtUsd(n) {
@@ -152,6 +152,7 @@
     if (params.get('category')) state.category = params.get('category');
     if (params.get('chain')) state.chain = params.get('chain');
     if (params.get('tab')) state.tab = params.get('tab');
+    if (params.get('c')) state.compare = params.get('c').split(',').filter(function (s) { return s.length > 0; }).slice(0, 2);
   }
   function writeHash() {
     var params = new URLSearchParams();
@@ -159,6 +160,7 @@
     if (state.category !== 'all') params.set('category', state.category);
     if (state.chain !== 'all') params.set('chain', state.chain);
     if (state.tab !== 'pre-token') params.set('tab', state.tab);
+    if (state.compare.length > 0) params.set('c', state.compare.join(','));
     if (state.selected) params.set('p', state.selected);
     var next = params.toString();
     if (next) window.history.replaceState(null, '', '#' + next);
@@ -298,7 +300,7 @@
       'data-slug': r.slug,
       tabindex: '0',
       onclick: function () { openDetail(r.slug); },
-      onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
+      onkeydown: function (e) { if (e.target !== e.currentTarget) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
     },
       el('td', { class: 'rank-num', text: String(r.rank) }),
       el('td', null, el('div', { class: 'name' },
@@ -312,7 +314,10 @@
         el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { class: r.rank === 1 ? 'gold' : null, style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
         el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
       )),
-      el('td', null, el('span', { class: 'status', text: 'no token' }))
+      el('td', null,
+        el('span', { class: 'status', text: 'no token' }),
+        el('button', { type: 'button', class: 'compare-toggle', 'aria-pressed': state.compare.indexOf(r.slug) >= 0 ? 'true' : 'false', text: state.compare.indexOf(r.slug) >= 0 ? 'Compared' : 'Compare', onclick: function (e) { e.stopPropagation(); compareToggle(r.slug); } })
+      )
     );
   }
 
@@ -333,7 +338,7 @@
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },
         el('table', null,
-          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Select a row for its model and farm plan. Arrow keys move between rows, Enter opens the detail.' }),
+          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Select a row for its model and farm plan. Arrow keys move between rows, Enter opens the detail, C marks a row to compare.' }),
           el('thead', null, el('tr', null,
             sortHeader('implied', 'Rank'),
             sortHeader('name', 'Protocol'),
@@ -482,6 +487,116 @@
     }
   }
 
+  // The side-by-side view: two protocols the reader picked, each model factor on its
+  // own row with the leader marked, a one-line verdict, and both farm plans next to
+  // each other. It mirrors the reference list in lib/model.ts (same eight factors, same
+  // fallbacks for a missing growth reading or age), so a comparison never disagrees
+  // with a detail view. It renders only when exactly two rows are picked.
+  function sideBySide(a, b) {
+    var entries = [
+      { key: 'tvl', label: 'Total value locked', first: a.tvl_usd, second: b.tvl_usd, firstText: fmtUsd(a.tvl_usd), secondText: fmtUsd(b.tvl_usd) },
+      { key: 'growth', label: 'Seven-day TVL change', first: a.change_7d === null ? 0 : a.change_7d, second: b.change_7d === null ? 0 : b.change_7d, firstText: fmtPct(a.change_7d), secondText: fmtPct(b.change_7d) },
+      { key: 'age', label: 'Days with no token on record', first: a.age_days === null ? 365 : a.age_days, second: b.age_days === null ? 365 : b.age_days, firstText: fmtAge(a.age_days), secondText: fmtAge(b.age_days) },
+      { key: 'multiple', label: 'Category multiple', first: a.category_multiple, second: b.category_multiple, firstText: String(a.category_multiple) + 'x', secondText: String(b.category_multiple) + 'x' },
+      { key: 'growthMult', label: 'Growth multiplier', first: a.growth_multiplier, second: b.growth_multiplier, firstText: String(a.growth_multiplier), secondText: String(b.growth_multiplier) },
+      { key: 'maturityMult', label: 'Maturity multiplier', first: a.maturity_multiplier, second: b.maturity_multiplier, firstText: String(a.maturity_multiplier), secondText: String(b.maturity_multiplier) },
+      { key: 'breadthMult', label: 'Breadth multiplier', first: a.breadth_multiplier, second: b.breadth_multiplier, firstText: String(a.breadth_multiplier), secondText: String(b.breadth_multiplier) },
+      { key: 'implied', label: 'Implied value', first: a.implied_value_usd, second: b.implied_value_usd, firstText: fmtUsd(a.implied_value_usd), secondText: fmtUsd(b.implied_value_usd) }
+    ];
+    entries.forEach(function (entry) {
+      entry.leader = entry.first === entry.second ? 'tie' : entry.first > entry.second ? 'first' : 'second';
+    });
+    return entries;
+  }
+
+  // One sentence on the pair: who leads on more of the eight factors, and how many
+  // times larger the leading implied value is than the other one.
+  function compareVerdict(a, b, entries) {
+    var firstWins = 0;
+    var secondWins = 0;
+    entries.forEach(function (entry) {
+      if (entry.leader === 'first') firstWins++;
+      else if (entry.leader === 'second') secondWins++;
+    });
+    var gap = Math.max(a.implied_value_usd, b.implied_value_usd) / Math.max(1, Math.min(a.implied_value_usd, b.implied_value_usd));
+    var leadText = firstWins === secondWins
+      ? 'Neither protocol leads: the two split the eight factors evenly.'
+      : (firstWins > secondWins ? a.name : b.name) + ' leads on ' + Math.max(firstWins, secondWins) + ' of the eight factors.';
+    var valueText = a.implied_value_usd === b.implied_value_usd
+      ? 'Both protocols carry the same implied value.'
+      : (a.implied_value_usd > b.implied_value_usd ? a.name : b.name) + ' carries the larger implied value, ' + gap.toFixed(1) + ' times the other one.';
+    return leadText + ' ' + valueText;
+  }
+
+  // The two picked rows, or null when the comparison is not exactly two rows: a slug
+  // the data does not carry (a stale link, a filtered board) clears the pair.
+  function comparePicked() {
+    if (state.compare.length !== 2) return null;
+    var first = DATA.rows.filter(function (r) { return r.slug === state.compare[0]; })[0];
+    var second = DATA.rows.filter(function (r) { return r.slug === state.compare[1]; })[0];
+    if (!first || !second) return null;
+    return [first, second];
+  }
+
+  // Mark or unmark one row for comparison. A third pick drops the oldest of the two,
+  // so the pair is always the two most recently picked.
+  function compareToggle(slug) {
+    var at = state.compare.indexOf(slug);
+    if (at >= 0) state.compare.splice(at, 1);
+    else {
+      if (state.compare.length >= 2) state.compare.shift();
+      state.compare.push(slug);
+    }
+    writeHash();
+    render();
+  }
+
+  // Empty the comparison, if there is one; a no-op otherwise, so Escape stays quiet
+  // when nothing is picked.
+  function compareClear() {
+    if (state.compare.length === 0) return;
+    state.compare = [];
+    writeHash();
+    render();
+  }
+
+  // One half of the comparison: the protocol's rank and value, its factor rows with
+  // the ones it leads highlighted, and its full farm plan.
+  function compareColumn(row, side, entries) {
+    return el('div', { class: 'compare-col' },
+      el('h3', { text: 'Rank ' + row.rank + ' · ' + fmtUsd(row.implied_value_usd) }),
+      el('p', { class: 'sub', text: (row.category || 'Other') + ' on ' + (row.chains || []).join(', ') }),
+      el('div', { class: 'compare-factors' }, entries.map(function (entry) {
+        return el('div', { class: 'compare-factor' + (entry.leader === side ? ' leads' : '') },
+          el('span', { text: entry.label }),
+          el('b', { class: 'num', text: side === 'first' ? entry.firstText : entry.secondText })
+        );
+      })),
+      farmPlanSection(farmSteps(row))
+    );
+  }
+
+  // The comparison panel: a heading naming both protocols, the verdict, and the two
+  // columns side by side. Nothing renders until the pair is complete.
+  function comparePanel() {
+    var pair = comparePicked();
+    if (pair === null) return null;
+    var first = pair[0];
+    var second = pair[1];
+    var entries = sideBySide(first, second);
+    return el('section', { class: 'panel compare', 'aria-label': 'Comparison of two protocols' },
+      el('div', { class: 'compare-head' },
+        el('h2', { text: first.name + ' against ' + second.name }),
+        el('button', { type: 'button', class: 'button', text: 'Clear comparison', onclick: function () { compareClear(); } })
+      ),
+      el('p', { class: 'sub', text: compareVerdict(first, second, entries) }),
+      el('div', { class: 'compare-grid' },
+        compareColumn(first, 'first', entries),
+        compareColumn(second, 'second', entries)
+      )
+    );
+  }
+
   function render() {
     app.textContent = '';
     var shell = el('div', { class: 'shell' });
@@ -493,6 +608,8 @@
       var strip = topStrip();
       if (strip) shell.appendChild(strip);
       shell.appendChild(boardTable());
+      var pair = comparePanel();
+      if (pair) shell.appendChild(pair);
       shell.appendChild(modelPanel());
     } else {
       shell.appendChild(liveTable());
@@ -511,7 +628,7 @@
   // A hash change from a link, the back button or a fresh URL re-reads the state: the board,
   // the filtered view and the detail drawer are all addressable.
   window.addEventListener('hashchange', function () {
-    state.q = ''; state.category = 'all'; state.chain = 'all'; state.tab = 'pre-token'; state.selected = null;
+    state.q = ''; state.category = 'all'; state.chain = 'all'; state.tab = 'pre-token'; state.selected = null; state.compare = [];
     readHash();
     render();
   });
@@ -543,6 +660,12 @@
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     if (e.key === 'ArrowDown') { e.preventDefault(); moveSelection(1); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); moveSelection(-1); }
+    else if (e.key === 'Escape') { compareClear(); }
+    else if (e.key === 'c' || e.key === 'C') {
+      var focused = document.activeElement;
+      var slug = focused && focused.getAttribute ? focused.getAttribute('data-slug') : null;
+      if (slug) { e.preventDefault(); compareToggle(slug); }
+    }
   }
   window.addEventListener('keydown', keyboardNav);
 })();
