@@ -28,7 +28,7 @@ h1 em{font-style:italic;color:var(--pine)}
 .pricing{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;align-self:start}
 .pricing h2{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 8px;font-weight:700}
 .formula{font-family:var(--mono);font-size:13px;line-height:1.5;background:#f1ecdb;border-radius:6px;padding:10px 12px;margin:0 0 10px}
-.scatter{width:100%;height:auto;display:block}
+.scatter{width:100%;height:auto;display:block;font-family:ui-monospace,Menlo,monospace}
 .fit-stats{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--line-soft)}
 .fit-stat{font-size:12.5px}
 .fit-stat b{display:block;font-size:16px;font-family:var(--serif)}

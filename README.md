@@ -21,36 +21,40 @@ market value.
 ## How an implied value is worked out
 
 Every row is scored by one formula applied to the snapshot's own figures, never by a
-hand-picked list of names. The price comes from the market's own curve: an ordinary
-least-squares fit of log10(market cap) on log10(TVL), computed at run time from the
-snapshot's priced protocols — intercept and elasticity are never shipped as constants.
+hand-picked list of names. The price comes from the market's own surface: a multiple
+regression of log10(market cap) on log10(TVL), log10(age in days + 1) and ln(1 + the
+seven-day TVL change), computed at run time from the snapshot's priced protocols —
+every coefficient is fitted, never shipped as a constant.
 
-- The fit: log10(market cap) = 2.084 + 0.654 x log10(TVL) on this snapshot, fitted on
-  98 comparables after two exclusions — exchange tokens, and 21 outliers whose market
-  cap sits more than 10x above TVL or below 2% of it. R² 0.346.
-- A category factor: each category's mean log residual from the curve, shrunk toward no
-  effect with a prior of five protocols and clamped between 0.25 and 4; a category with
-  no priced protocol takes 1.
-- A seasoning factor from how long the protocol has run with no token on record, rising
-  from 0.85 for a new listing to 1.15 after three years; an unknown listing date counts
-  as one year. Seasoning is a stated factor, not a fitted one: the snapshot shows no
-  measurable age effect on the curve (fitted age slope -0.05, standard error 0.16).
-- A momentum factor from the protocol's seven-day TVL change, clamped between minus
-  sixty and plus one hundred twenty percent, weighted at one half.
+- The fit: log10(market cap) = 2.700 + 0.640 x log10(TVL) - 0.154 x log10(age+1) +
+  0.746 x ln(1+change_7d) on this snapshot, fitted on 98 comparables after two
+  exclusions — exchange tokens, and 21 outliers whose market cap sits more than 10x
+  above TVL or below 2% of it. R² 0.356. Age enters negative: the longer a protocol
+  has gone with no token, the less the market pays per dollar of TVL. Growth enters
+  positive: a rising TVL is worth more than a flat one.
+- A category factor: each category's mean log residual from the surface, shrunk toward
+  1 with a prior of five protocols and clamped between 0.25 and 4; a category with no
+  priced protocol takes 1.
+- Growth enters as ln(1 + growth) because growth is multiplicative — and because the
+  priced protocols span only -40% to +3% in a week, a raw growth term would extrapolate
+  wildly on a protocol that doubled its TVL; the log form keeps one hot week from
+  multiplying a protocol tenfold. The change is clamped between minus sixty and plus
+  one hundred twenty percent before the log.
 
-The four terms multiply and round to whole dollars, with a floor of one dollar. Every row
+The terms multiply and round to whole dollars, with a floor of one dollar. Every row
 also carries an uncertainty band — the 25th to 75th percentile of actual over predicted
-across the comparables, x0.41 to x2.32 on this snapshot — so the page shows a range, not
+across the comparables, x0.48 to x2.69 on this snapshot — so the page shows a range, not
 just a centre.
 
 ## The model's own report card
 
 The model is applied to the priced protocols themselves and its errors are printed on the
 page, honestly. Five-fold cross-validation on the 98 comparables gives a median absolute
-error of 78.8%, with 31.6% of predictions landing within 2x of the actual market cap. The
-page says what that means: the curve is a starting price, not a promise, and the band is
-the honest part. The scatter plot on the page shows the fit itself — every comparable, the
-fitted line, and the band — so a reader can see how wide the market really is.
+error of 78.2%, with 34.7% of predictions landing within 2x of the actual market cap. The
+page says what that means: the surface is a starting price, not a promise, and the band
+is the honest part. The scatter plot on the page shows the fit itself — every comparable
+plotted as predicted against actual, the diagonal a perfect prediction, the band around
+it — so a reader can see how wide the market really is.
 
 The ranking is concentrated and the page says so: five of the top ten rows are risk
 curators, because their category factor is the highest among the large categories and
@@ -59,29 +63,29 @@ down to spread the top ten out.
 
 ## Farm plans
 
-Each row carries eight concrete steps, derived from the protocol's mechanism — vault
+Each row carries nine concrete steps, derived from the protocol's mechanism — vault
 curation, collateralised debt, DEX liquidity, real-world yield, prediction market,
 restaking, and fourteen more, all read from the snapshot's category, chain and name
 fields. Every step names its cost in dollars or gas and the time it takes: a fresh
 wallet, the main position, a check on the dashboard or points page, a weekly qualifying
-action, a holding period, a claim check, an exit path, and a farm log. Capital runs
-$50 to $250 by TVL; gas is chain-aware, from $0.10 on Solana to about $10 of bridge gas
-on Bitcoin-family chains. Nothing in a plan mentions a protocol by special favour: the
-same rules write every plan.
+action, a holding period, a sizing check against the row's own implied range, a claim
+check, an exit path, and a farm log. Capital runs $50 to $250 by TVL; gas is chain-aware,
+from $0.10 on Solana to about $10 of bridge gas on Bitcoin-family chains. Nothing in a
+plan mentions a protocol by special favour: the same rules write every plan.
 
 ## The page
 
 The dashboard is a single static page with no network calls, in a light editorial style:
 serif headlines on warm paper, pine green and brass accents. It shows a research summary
-with the fitted curve and its scatter, a stats strip, a coverage bar, top-five cards with
-value ranges, a distribution histogram, and a sortable, filterable table with an
-uncertainty band on every row — filterable by category, chain, mechanism and seven-day
-move, with a watchlist-only view and search. A detail view for every protocol shows the
-model's own inputs recomputed on the page, its farm plan, and its ticket, setup time and
-hold. Two rows can be compared side by side across all eight model factors. The
-live-token protocols sit on their own tab at market value. Keyboard users can move
-between rows with the arrow keys, open a detail with Enter, mark two rows for comparison
-with the C key, and clear the comparison with Escape.
+with the fitted surface and its predicted-against-actual scatter, a stats strip, a
+coverage bar, top-five cards with value ranges, a distribution histogram, and a sortable,
+filterable table with an uncertainty band on every row — filterable by category, chain,
+mechanism and seven-day move, with a watchlist-only view and search. A detail view for
+every protocol shows the model's own inputs recomputed on the page, its farm plan, and
+its ticket, setup time and hold. Two rows can be compared side by side across all eight
+model factors. The live-token protocols sit on their own tab at market value. Keyboard
+users can move between rows with the arrow keys, open a detail with Enter, mark two rows
+for comparison with the C key, and clear the comparison with Escape.
 
 ## Running it
 
