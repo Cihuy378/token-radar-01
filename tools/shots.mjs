@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { buildRadar, dataScript, parseSnapshot } from '../lib/model.ts';
 
 const CHROME = '/home/hatch/workspace/makefun/shot-tool/chrome-linux64/chrome';
+const VIEWPORT = { width: 1440, height: 900 };
 
 function arg(name, fallback) {
   const at = process.argv.indexOf(`--${name}`);
@@ -47,21 +48,29 @@ for (const name of readdirSync(join(repo, 'dashboard'))) {
 mkdirSync(shotsDir, { recursive: true });
 
 const browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox', '--disable-gpu'] });
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
 const base = `file://${join(renderDir, 'dashboard', 'index.html')}`;
 
+// One screenshot: wait for the board to render instead of a fixed sleep, so a slow first paint
+// still lands, then let the page settle before the capture.
 async function shot(url, file) {
   await page.goto(url, { waitUntil: 'load' });
-  await page.waitForTimeout(400);
+  await page.waitForSelector('#board .shell', { timeout: 10_000 });
+  await page.waitForTimeout(300);
   await page.screenshot({ path: file });
   const bytes = statSync(file).size;
   process.stdout.write(`shots: ${file} ${bytes} bytes\n`);
+  if (bytes > 524_288) throw new Error(`${file} is ${bytes} bytes, past the 512 KiB cap`);
   return bytes;
 }
 
 const rank1 = radar.rows[0].slug;
-await shot(base, join(shotsDir, '1-board.png'));
-await shot(`${base}#p=${encodeURIComponent(rank1)}`, join(shotsDir, '2-detail.png'));
-await shot(`${base}#category=Lending`, join(shotsDir, '3-filtered.png'));
-await browser.close();
+try {
+  await shot(base, join(shotsDir, '1-board.png'));
+  await shot(`${base}#p=${encodeURIComponent(rank1)}`, join(shotsDir, '2-detail.png'));
+  await shot(`${base}#category=Lending`, join(shotsDir, '3-filtered.png'));
+} finally {
+  // The browser closes even when a shot fails, so a bad capture never leaves a stray process.
+  await browser.close();
+}
 process.stdout.write(`shots: done, rank-1 detail is ${rank1}\n`);

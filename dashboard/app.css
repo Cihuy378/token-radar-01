@@ -1,5 +1,6 @@
 /* Token Radar, radar-2 theme. Ink-dark canvas, lime signal, one panel radius, two typefaces.
-   Everything else is spacing, a hairline and a type step. */
+   Everything else is spacing, a hairline and a type step. The board is dense on purpose: the
+   table's rows are short so the first screen shows the ranking, not one row of it. */
 :root {
   --canvas: #0b100d;
   --surface: #111a14;
@@ -45,7 +46,7 @@ button { cursor: pointer; }
 .top-meta span { white-space: nowrap; }
 .top-meta .model-tag { color: var(--accent); font-family: var(--font-num); }
 
-.lede { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.7fr); gap: var(--s6); padding: var(--s6) 0 var(--s5); }
+.lede { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.7fr); gap: var(--s6); padding: var(--s5) 0 var(--s4); }
 .lede p { color: var(--muted); max-width: 64ch; margin-top: var(--s2); }
 .lede p b { color: var(--ink); font-weight: 600; }
 .facts { display: grid; gap: var(--s2); align-content: start; border-left: 1px solid var(--border); padding-left: var(--s5); }
@@ -54,8 +55,8 @@ button { cursor: pointer; }
 .fact span { color: var(--muted); font-size: 13px; }
 
 /* Top three, the board's headliners. */
-.top3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s3); padding-bottom: var(--s5); }
-.pick { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s4); display: grid; gap: var(--s1); }
+.top3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s3); padding-bottom: var(--s4); }
+.pick { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s3) var(--s4); display: grid; gap: var(--s1); }
 .pick:first-child { border-color: var(--gold); }
 .pick .rank { font-family: var(--font-num); font-size: 12px; color: var(--gold); letter-spacing: 0.08em; text-transform: uppercase; }
 .pick:nth-child(2) .rank, .pick:nth-child(3) .rank { color: var(--accent); }
@@ -63,7 +64,7 @@ button { cursor: pointer; }
 .pick .val { font-family: var(--font-num); font-size: 20px; font-weight: 600; color: var(--accent); }
 .pick .sub { color: var(--muted); font-size: 12px; }
 
-.controls { display: flex; flex-wrap: wrap; align-items: end; gap: var(--s3); padding: var(--s4) 0; border-top: 1px solid var(--border); }
+.controls { display: flex; flex-wrap: wrap; align-items: end; gap: var(--s3); padding: var(--s3) 0; border-top: 1px solid var(--border); }
 .field { display: grid; gap: var(--s1); }
 .field label { color: var(--muted); font-size: 12px; }
 .field input, .field select {
@@ -77,10 +78,24 @@ button { cursor: pointer; }
 .tabs button[aria-pressed="true"] { background: var(--accent); color: #0b100d; font-weight: 600; }
 .count { margin-left: auto; color: var(--muted); font-size: 13px; align-self: center; }
 
+/* Top-ten strip: the first ten rows of what the board is showing, as compact chips. */
+.top10 { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); padding: var(--s2) 0; }
+.top10-label { font-family: var(--font-num); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-right: var(--s1); }
+.top10-chip {
+  display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 10px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  color: var(--ink); font-size: 12px; white-space: nowrap;
+}
+.top10-rank { font-family: var(--font-num); color: var(--accent); font-weight: 600; }
+.top10-name { font-weight: 600; }
+.top10-val { font-family: var(--font-num); color: var(--muted); }
+.top10-chip:hover { border-color: var(--accent-dim); background: var(--panel); }
+.top10-chip:hover .top10-val { color: var(--ink); }
+
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .table-wrap { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th, td { padding: var(--s3); border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: var(--s2) var(--s3); border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
 tbody tr:last-child td { border-bottom: 0; }
 th { color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap; }
 th button { display: inline-flex; align-items: center; gap: var(--s1); border: 0; background: none; padding: 0; color: inherit; font: inherit; }
@@ -90,8 +105,8 @@ tbody tr:hover { background: var(--panel); }
 tbody tr[data-selected="true"] { background: #1b2b1f; }
 tbody tr.top1 td:first-child { color: var(--gold); }
 .num { font-family: var(--font-num); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.rank-num { font-family: var(--font-num); font-size: 15px; color: var(--muted); }
-.name { display: grid; gap: 2px; }
+.rank-num { font-family: var(--font-num); font-size: 14px; color: var(--muted); }
+.name { display: grid; gap: 1px; }
 .name b { font-weight: 600; }
 .sub { color: var(--muted); font-size: 12px; }
 .pos { color: var(--positive); }
@@ -152,6 +167,9 @@ tbody tr.top1 td:first-child { color: var(--gold); }
   .facts { border-left: 0; border-top: 1px solid var(--border); padding-left: 0; padding-top: var(--s4); }
   .top3 { grid-template-columns: 1fr; }
   .field input { min-width: 0; width: 100%; }
+  /* On a narrow screen the strip scrolls sideways instead of stacking into a tall column. */
+  .top10 { flex-wrap: nowrap; overflow-x: auto; padding-bottom: var(--s2); }
+  .top10-chip { flex: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }

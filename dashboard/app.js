@@ -1,7 +1,8 @@
 // Token Radar, radar-2 dashboard. It reads window.RADAR (written beside dashboard/ by main.ts)
-// and renders the ranked board, a filterable table, a per-protocol detail drawer with the model's
-// own inputs and the protocol's farm plan, plus the calibration the model computed from the
-// snapshot's live protocols. No network: every byte it shows is in data.js.
+// and renders the ranked board, a compact top-ten strip, a filterable table, a per-protocol
+// detail drawer with the model's own inputs and the protocol's farm plan, plus the calibration
+// the model computed from the snapshot's live protocols. No network: every byte it shows is in
+// data.js.
 (function () {
   'use strict';
 
@@ -27,8 +28,10 @@
     if (days >= 365) return (days / 365).toFixed(1) + 'y';
     return Math.max(0, Math.round(days)) + 'd';
   }
+
   // The model in one function: the page recomputes a row from the snapshot figures and checks the
-  // number board.json carries, so the page's code and the board's data are visibly the same arithmetic.
+  // number board.json carries, so the page's code and the board's data are visibly the same
+  // arithmetic.
   function impliedOf(row, model) {
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var growthMult = 1 + (growth / 100) * model.growth_weight;
@@ -59,15 +62,16 @@
     return node;
   }
 
-  // The farm plan is the same derivation main.ts writes to board.json: category, chains, TVL and age
-  // decide the action, the weekly activity, the capital, the hold and every cost and time. No name
-  // is special-cased. Keep this in step with lib/model.ts: the detail view shows these steps, and
-  // board.json carries the same strings.
+  // The farm plan is the same derivation main.ts writes to board.json: category, chains, TVL and
+  // age decide the action, the weekly activity, the capital, the hold and every cost and time. No
+  // name is special-cased. Keep this in step with lib/model.ts: the detail view shows these
+  // steps, and board.json carries the same strings.
   function chainOf(p) { return p.chains && p.chains.length > 0 ? p.chains[0] : 'its main chain'; }
   function gasFor(chain) {
     if (chain === 'Ethereum') return 'about $8 of gas per transaction';
     if (chain === 'Solana') return 'about $0.10 of gas per transaction';
     if (chain === 'Bitcoin' || chain === 'Babylon Genesis' || chain === 'CORE') return 'about $10 of bridge gas per move';
+    if (chain === 'Base' || chain === 'Arbitrum' || chain === 'Optimism' || chain === 'Polygon' || chain === 'Binance' || chain === 'Avalanche') return 'about $0.20 of gas per transaction';
     return 'about $1 of gas per transaction';
   }
   function capitalFor(p) {
@@ -252,6 +256,23 @@
     );
   }
 
+  // The top ten at a glance: the first ten rows of whatever the board is showing right now
+  // (the full ranking, or the filtered one), each a button that opens the protocol's detail.
+  function topStrip() {
+    var picks = sortedRows(rows()).slice(0, 10);
+    if (picks.length === 0) return null;
+    return el('section', { class: 'top10', 'aria-label': 'Top ten of the rows shown' },
+      el('span', { class: 'top10-label', text: picks.length < 10 ? 'Top ' + picks.length : 'Top 10' }),
+      picks.map(function (r) {
+        return el('button', { type: 'button', class: 'top10-chip', onclick: function () { openDetail(r.slug); } },
+          el('span', { class: 'top10-rank', text: String(r.rank) }),
+          el('span', { class: 'top10-name', text: r.name }),
+          el('span', { class: 'top10-val', text: fmtUsd(r.implied_value_usd) })
+        );
+      })
+    );
+  }
+
   function sortHeader(key, label) {
     return el('th', { scope: 'col' },
       el('button', { type: 'button', onclick: function () { if (state.sort === key) state.dir = -state.dir; else { state.sort = key; state.dir = -1; } render(); } },
@@ -270,7 +291,9 @@
         el('button', { class: 'button primary', type: 'button', text: 'Clear filters', onclick: function () { state.q = ''; state.category = 'all'; state.chain = 'all'; writeHash(); render(); } })
       ));
     }
-    var max = list[0].implied_value_usd || 1;
+    // The bars scale to the largest implied value among the rows shown, not to the first row:
+    // a table sorted by name or TVL still shows the bars in proportion.
+    var max = Math.max.apply(null, list.map(function (r) { return r.implied_value_usd; })) || 1;
     var tbody = el('tbody');
     list.forEach(function (r) {
       var growth = r.change_7d === null ? 'n/a' : fmtPct(r.change_7d);
@@ -340,10 +363,27 @@
     );
   }
 
+  // The honest note about the top ten's concentration, computed from the page's own data: the
+  // mix of categories in the top ten, the leading category's calibrated multiple, and the plain
+  // statement that the multiple is not tuned down to spread the ranking.
+  function concentrationNote() {
+    var mix = DATA.concentration || [];
+    if (mix.length === 0) return null;
+    var top = mix[0];
+    var cal = (DATA.calibration.categories || []).filter(function (c) { return c.category === top.category; })[0];
+    var multiple = cal ? cal.multiple.toFixed(3) : 'n/a';
+    var parts = mix.map(function (m) { return m.category + ' ' + m.top10_rows; }).join(' · ');
+    return 'Top ten by category: ' + parts + '. ' + top.category + ' holds ' + top.top10_rows +
+      ' of the top ten because its calibrated multiple is ' + multiple +
+      ' — the market pays more per dollar of TVL for ' + top.category +
+      ' than for lower-multiple categories. That is what the calibration says; the multiple is not tuned down to spread the top ten.';
+  }
+
   function modelPanel() {
     var m = DATA.model;
     var cal = DATA.calibration;
     var topCal = cal.categories.slice(0, 10);
+    var note = concentrationNote();
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How implied value is computed' }),
       el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
@@ -364,7 +404,9 @@
           );
         }))
       ),
-      el('p', { class: 'calib-note', text: 'Top 10 of ' + cal.categories.length + ' calibrated categories, from ' + cal.live_protocols + ' live-token protocols. A flat 0.25 for every category would price a lending pool and a risk curator as the same business; the market does not.' })
+      el('p', { class: 'calib-note', text: 'Top 10 of ' + cal.categories.length + ' calibrated categories, from ' + cal.live_protocols + ' live-token protocols. A flat 0.25 for every category would price a lending pool and a risk curator as the same business; the market does not.' }),
+      note ? el('h3', { text: 'Top-ten concentration' }) : null,
+      note ? el('p', { class: 'calib-note', text: note }) : null
     );
   }
 
@@ -425,8 +467,14 @@
     shell.appendChild(lede());
     shell.appendChild(top3());
     shell.appendChild(controls());
-    shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
-    if (state.tab === 'pre-token') shell.appendChild(modelPanel());
+    if (state.tab === 'pre-token') {
+      var strip = topStrip();
+      if (strip) shell.appendChild(strip);
+      shell.appendChild(boardTable());
+      shell.appendChild(modelPanel());
+    } else {
+      shell.appendChild(liveTable());
+    }
     app.appendChild(shell);
     app.setAttribute('aria-busy', 'false');
     if (!dialog.isConnected) app.appendChild(dialog);

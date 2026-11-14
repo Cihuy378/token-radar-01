@@ -1,7 +1,7 @@
 // Token Radar, radar-2 entry (Node 22, standard library only).
 //
-// main.ts reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores every
-// pre-token protocol with the calibrated model in lib/model.ts, writes the ranked board to
+// main.ts reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores
+// every pre-token protocol with the calibrated model in lib/model.ts, writes the ranked board to
 // /output/board.json, writes the dashboard's data beside the page as data.js, copies this
 // repository's dashboard/ and screenshots/ to /output, and writes /output/dossier.json with the
 // vendored make.fun library, so the judge reads exactly what the scorer checks.
@@ -10,6 +10,10 @@
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
 // The program runs twice and both runs must write the same bytes: it reads only the sealed
 // snapshot and its own files, takes no clock reading and opens no network.
+//
+// Before the dossier is written, the program refuses outputs the gate would refuse anyway — a
+// screenshot past its byte cap, a dashboard past the dossier's text cap — with a plain error,
+// instead of handing in a cut dossier.
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -32,11 +36,16 @@ function arg(name: string, fallback: string): string {
   return withEquals === undefined ? fallback : withEquals.slice(name.length + 3);
 }
 
+/** Refuse with a plain error on stderr and a non-zero exit. */
+function fail(message: string): never {
+  process.stderr.write(`token radar: ${message}\n`);
+  process.exit(1);
+}
+
 const inputArg = arg('input', '/input');
 const inputFile = inputArg.endsWith('.json') ? inputArg : join(inputArg, 'snapshot.json');
 if (!existsSync(inputFile)) {
-  process.stderr.write(`token radar: no snapshot at ${inputFile}: pass --input <snapshot.json|directory> or mount the sealed /input\n`);
-  process.exit(2);
+  fail(`no snapshot at ${inputFile}: pass --input <snapshot.json|directory> or mount the sealed /input`);
 }
 const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
@@ -44,8 +53,7 @@ const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
 const { board, radar } = buildRadar(snapshot);
 const issue = boardIssue(board, snapshot);
 if (issue !== null) {
-  process.stderr.write(`token radar: the model wrote a board the gate refuses: ${issue}\n`);
-  process.exit(1);
+  fail(`the model wrote a board the gate refuses: ${issue}`);
 }
 
 mkdirSync(out, { recursive: true });
@@ -68,23 +76,47 @@ function copyFiles(from: string, to: string): string[] {
 }
 
 const dashboardFiles = copyFiles(join(here, 'dashboard'), join(out, 'dashboard'));
+if (dashboardFiles.length === 0) {
+  fail('dashboard/ holds no files: the dossier would carry no page');
+}
+// The dossier's text shows the dashboard's source whole only while it fits in the text cap;
+// refuse past it rather than hand in a cut source.
+const dashboardBytes = dashboardFiles.reduce((sum, name) => sum + statSync(join(out, 'dashboard', name)).size, 0);
+if (dashboardBytes > TEXT_MAX_BYTES) {
+  fail(`dashboard/ is ${dashboardBytes} bytes, past the ${TEXT_MAX_BYTES}-byte text cap: the judge would read a cut source`);
+}
+
 const shots = copyFiles(join(here, 'screenshots'), join(out, 'screenshots'));
 if (shots.length < 3) {
-  process.stderr.write(`token radar: screenshots/ holds ${shots.length} image${shots.length === 1 ? '' : 's'}: hand in 3, the board, a detail view and a filtered view\n`);
-  process.exit(1);
+  fail(`screenshots/ holds ${shots.length} image${shots.length === 1 ? '' : 's'}: hand in 3, the board, a detail view and a filtered view`);
 }
 for (const name of shots) {
   if (!IMAGE_NAME.test(name)) {
-    process.stderr.write(`token radar: screenshots/${name}: a name is letters, digits and . _ -, 1 to 128 characters\n`);
-    process.exit(1);
+    fail(`screenshots/${name}: a name is letters, digits and . _ -, 1 to 128 characters`);
+  }
+  const bytes = statSync(join(out, 'screenshots', name)).size;
+  if (bytes > SCREENSHOT_CAPS.max_bytes) {
+    fail(`screenshots/${name} is ${bytes} bytes, past the ${SCREENSHOT_CAPS.max_bytes}-byte cap`);
+  }
+  // A whole PNG or JPEG, by its magic bytes: a truncated file is refused here, not by the
+  // dossier builder with a less plain error.
+  const head = readFileSync(join(out, 'screenshots', name)).subarray(0, 8);
+  const isPng = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
+  const isJpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+  if (!isPng && !isJpeg) {
+    fail(`screenshots/${name} is not a whole PNG or JPEG`);
   }
 }
 
 // The dossier is written last: the scorer rebuilds it from this /output and compares bytes.
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
 
+const topMix = radar.concentration[0];
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
     `token radar: model ${radar.model_version}, calibrated on ${radar.calibration.live_protocols} live protocols: global median market-cap/TVL ${radar.calibration.global_median.toFixed(3)}, top multiple ${radar.calibration.categories[0]?.category} ${radar.calibration.categories[0]?.multiple.toFixed(3)}\n` +
-    `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dashboardFiles.length} files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
+    (topMix === undefined
+      ? ''
+      : `token radar: top-ten concentration: ${topMix.category} holds ${topMix.top10_rows} of the top ten\n`) +
+    `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dashboardFiles.length} files, ${dashboardBytes} bytes), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
