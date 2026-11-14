@@ -75,38 +75,53 @@ function copyFiles(from: string, to: string): string[] {
   return copied;
 }
 
-const dashboardFiles = copyFiles(join(here, 'dashboard'), join(out, 'dashboard'));
-if (dashboardFiles.length === 0) {
-  fail('dashboard/ holds no files: the dossier would carry no page');
-}
-// The dossier's text shows the dashboard's source whole only while it fits in the text cap;
-// refuse past it rather than hand in a cut source.
-const dashboardBytes = dashboardFiles.reduce((sum, name) => sum + statSync(join(out, 'dashboard', name)).size, 0);
-if (dashboardBytes > TEXT_MAX_BYTES) {
-  fail(`dashboard/ is ${dashboardBytes} bytes, past the ${TEXT_MAX_BYTES}-byte text cap: the judge would read a cut source`);
+/** The dashboard's copied files, refused unless the dossier can carry their source whole. */
+function checkDashboard(dashboardFiles: string[], outDir: string): number {
+  if (dashboardFiles.length === 0) {
+    fail('dashboard/ holds no files: the dossier would carry no page');
+  }
+  // The dossier's text shows the dashboard's source whole only while it fits in the text cap;
+  // refuse past it rather than hand in a cut source.
+  const dashboardBytes = dashboardFiles.reduce((sum, name) => sum + statSync(join(outDir, 'dashboard', name)).size, 0);
+  if (dashboardBytes > TEXT_MAX_BYTES) {
+    fail(`dashboard/ is ${dashboardBytes} bytes, past the ${TEXT_MAX_BYTES}-byte text cap: the judge would read a cut source`);
+  }
+  return dashboardBytes;
 }
 
-const shots = copyFiles(join(here, 'screenshots'), join(out, 'screenshots'));
-if (shots.length < 3) {
-  fail(`screenshots/ holds ${shots.length} image${shots.length === 1 ? '' : 's'}: hand in 3, the board, a detail view and a filtered view`);
-}
-for (const name of shots) {
-  if (!IMAGE_NAME.test(name)) {
-    fail(`screenshots/${name}: a name is letters, digits and . _ -, 1 to 128 characters`);
-  }
-  const bytes = statSync(join(out, 'screenshots', name)).size;
-  if (bytes > SCREENSHOT_CAPS.max_bytes) {
-    fail(`screenshots/${name} is ${bytes} bytes, past the ${SCREENSHOT_CAPS.max_bytes}-byte cap`);
-  }
-  // A whole PNG or JPEG, by its magic bytes: a truncated file is refused here, not by the
-  // dossier builder with a less plain error.
-  const head = readFileSync(join(out, 'screenshots', name)).subarray(0, 8);
+/** One screenshot's bytes: a whole PNG or JPEG, by its magic bytes. */
+function isWholeImage(head: Buffer): boolean {
   const isPng = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
   const isJpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
-  if (!isPng && !isJpeg) {
-    fail(`screenshots/${name} is not a whole PNG or JPEG`);
+  return isPng || isJpeg;
+}
+
+/** The screenshots, refused unless there are three whole images inside their byte cap. */
+function checkScreenshots(shots: string[], outDir: string): void {
+  if (shots.length < 3) {
+    fail(`screenshots/ holds ${shots.length} image${shots.length === 1 ? '' : 's'}: hand in 3, the board, a detail view and a filtered view`);
+  }
+  for (const name of shots) {
+    if (!IMAGE_NAME.test(name)) {
+      fail(`screenshots/${name}: a name is letters, digits and . _ -, 1 to 128 characters`);
+    }
+    const bytes = statSync(join(outDir, 'screenshots', name)).size;
+    if (bytes > SCREENSHOT_CAPS.max_bytes) {
+      fail(`screenshots/${name} is ${bytes} bytes, past the ${SCREENSHOT_CAPS.max_bytes}-byte cap`);
+    }
+    // A truncated file is refused here, not by the dossier builder with a less plain error.
+    const head = readFileSync(join(outDir, 'screenshots', name)).subarray(0, 8);
+    if (!isWholeImage(head)) {
+      fail(`screenshots/${name} is not a whole PNG or JPEG`);
+    }
   }
 }
+
+const dashboardFiles = copyFiles(join(here, 'dashboard'), join(out, 'dashboard'));
+const dashboardBytes = checkDashboard(dashboardFiles, out);
+
+const shots = copyFiles(join(here, 'screenshots'), join(out, 'screenshots'));
+checkScreenshots(shots, out);
 
 // The dossier is written last: the scorer rebuilds it from this /output and compares bytes.
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));

@@ -248,32 +248,55 @@ function shrunkMultiple(categoryMedian: number | null, n: number, globalMedian: 
   return clamp(shrunk, model.multiple_min, model.multiple_max);
 }
 
-/**
- * The calibration: the median market-cap / TVL ratio of the snapshot's live-token protocols,
- * per category and overall. Live CEX protocols are left out: an exchange's token is not a
- * protocol's.
- */
-export function calibrate(snapshot: Snapshot, model: ModelConstants = MODEL): Calibration {
-  const live = snapshot.protocols.filter(
+/** One live protocol's market-cap / TVL ratio: what the market pays per dollar of TVL. */
+function ratioOf(p: SnapshotProtocol): number {
+  return (p.mcap_usd ?? 0) / p.tvl_usd;
+}
+
+/** The protocols the calibration learns from: live-token, positive TVL, not an exchange token. */
+function calibrationSet(snapshot: Snapshot): SnapshotProtocol[] {
+  return snapshot.protocols.filter(
     (p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0 && p.category !== 'CEX',
   );
-  const globalSorted = live.map((p) => p.mcap_usd! / p.tvl_usd).sort((a, b) => a - b);
-  const globalMedian = medianOf(globalSorted) ?? 0.25;
+}
+
+/** The live ratios grouped by category, each list sorted ascending for its median. */
+function ratiosByCategory(live: SnapshotProtocol[]): Map<string, number[]> {
   const byCategory = new Map<string, number[]>();
   for (const p of live) {
     const key = p.category ?? 'Other';
     const list = byCategory.get(key);
-    if (list === undefined) byCategory.set(key, [p.mcap_usd! / p.tvl_usd]);
-    else list.push(p.mcap_usd! / p.tvl_usd);
+    if (list === undefined) byCategory.set(key, [ratioOf(p)]);
+    else list.push(ratioOf(p));
   }
-  const categories: CalibrationRow[] = [];
-  for (const [category, ratios] of byCategory) {
-    const sorted = ratios.sort((a, b) => a - b);
-    const catMedian = medianOf(sorted);
-    const multiple = shrunkMultiple(catMedian, sorted.length, globalMedian, model);
-    categories.push({ category, live_protocols: sorted.length, category_median: catMedian, multiple });
-  }
-  categories.sort((a, b) => b.multiple - a.multiple || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+  for (const ratios of byCategory.values()) ratios.sort((a, b) => a - b);
+  return byCategory;
+}
+
+/** One category's calibration row: its median ratio, shrunk toward the global median. */
+function calibrateCategory(category: string, ratios: number[], globalMedian: number, model: ModelConstants): CalibrationRow {
+  const catMedian = medianOf(ratios);
+  return {
+    category,
+    live_protocols: ratios.length,
+    category_median: catMedian,
+    multiple: shrunkMultiple(catMedian, ratios.length, globalMedian, model),
+  };
+}
+
+/**
+ * The calibration: the median market-cap / TVL ratio of the snapshot's live-token protocols,
+ * per category and overall. Live CEX protocols are left out: an exchange's token is not a
+ * protocol's. The global median is the fallback for a category with no live protocol at all,
+ * and the shrinkage prior keeps a one-protocol category from setting its own multiple.
+ */
+export function calibrate(snapshot: Snapshot, model: ModelConstants = MODEL): Calibration {
+  const live = calibrationSet(snapshot);
+  const globalSorted = live.map(ratioOf).sort((a, b) => a - b);
+  const globalMedian = medianOf(globalSorted) ?? 0.25;
+  const categories = [...ratiosByCategory(live).entries()]
+    .map(([category, ratios]) => calibrateCategory(category, ratios, globalMedian, model))
+    .sort((a, b) => b.multiple - a.multiple || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
   return { global_median: globalMedian, live_protocols: live.length, categories };
 }
 
@@ -339,6 +362,32 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
   return new Map(protocols.map((p) => [p.slug, p]));
 }
 
+/** The early radar's picks: rankable pre-token protocols below the watchlist floor, by TVL. */
+function chooseEarly(snapshot: Snapshot, chosen: Map<string, SnapshotProtocol>): SnapshotProtocol[] {
+  return snapshot.protocols
+    .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
+    .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+    .slice(0, EARLY_ROWS);
+}
+
+/** One chosen protocol with its scored value: the row buildBoard ranks. */
+type ScoredProtocol = ReturnType<typeof impliedValue> & { p: SnapshotProtocol };
+
+/** Every chosen protocol scored and sorted strongest first, ties broken by slug. */
+function scoreChosen(
+  chosen: Map<string, SnapshotProtocol>,
+  snapshot: Snapshot,
+  calibration: Calibration,
+  model: ModelConstants,
+): ScoredProtocol[] {
+  const scored = [...chosen.values()].map((p) => {
+    const v = impliedValue(p, snapshot.as_of, calibration, model);
+    return { p, ...v };
+  });
+  scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
+  return scored;
+}
+
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const calibration = calibrate(snapshot, model);
@@ -352,18 +401,15 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   }
   // The early radar: pre-token protocols below the watchlist floor, by TVL, capped. Never a
   // replacement for a watchlist row: a chosen protocol stays chosen.
-  const early = snapshot.protocols
-    .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
-    .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
-    .slice(0, EARLY_ROWS);
-  for (const p of early) chosen.set(p.slug, p);
+  for (const p of chooseEarly(snapshot, chosen)) chosen.set(p.slug, p);
 
-  const scored = [...chosen.values()].map((p) => {
-    const v = impliedValue(p, snapshot.as_of, calibration, model);
-    return { p, ...v };
-  });
-  scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
-  return scored.map((s, i) => ({
+  const scored = scoreChosen(chosen, snapshot, calibration, model);
+  return scored.map(toBoardRow);
+}
+
+/** One scored protocol as a board row: its rank, its figures and its farm plan. */
+function toBoardRow(s: ScoredProtocol, i: number): BoardRow {
+  return {
     rank: i + 1,
     slug: s.p.slug,
     name: s.p.name,
@@ -387,7 +433,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       age_days: s.age,
     },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
-  }));
+  };
 }
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
@@ -442,43 +488,84 @@ function holdDaysFor(age: number | null): number {
   return 30;
 }
 
+/**
+ * The farm plan's rules, as tables instead of two parallel if-chains: the main position
+ * and the weekly activity share the same category words but not the same precedence —
+ * the weekly list puts the curator rule before the perpetual rule, the main list the
+ * other way round — so each list keeps its own order. A rule's words are matched against
+ * the lowercased category, first match wins, and the fallback at the end of each list is
+ * the generic step. The step texts are the same strings the if-chains wrote: the board
+ * does not change when the dispatch does.
+ */
+interface PlanRule {
+  words: string[];
+  write: (name: string, capital: number, chain: string) => string;
+}
+
+/** The main position's rules, in precedence order. */
+const ACTION_RULES: PlanRule[] = [
+  { words: ['lend', 'cdp', 'collateral'], write: (name, capital, chain) => `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.` },
+  { words: ['dex', 'yield', 'leveraged farm'], write: (name, capital, chain) => `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.` },
+  { words: ['bridge'], write: (name, capital, chain) => `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.` },
+  { words: ['staking', 'restak'], write: (name, capital, chain) => `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.` },
+  { words: ['perpetual', 'derivative'], write: (name, capital, chain) => `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.` },
+  { words: ['prediction'], write: (name, capital, chain) => `Fund $${capital} and place one market position on ${name}.` },
+  { words: ['curator', 'allocator'], write: (name, capital, chain) => `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.` },
+  { words: ['stable'], write: (name, capital, chain) => `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.` },
+  { words: ['rwa'], write: (name, capital, chain) => `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.` },
+  { words: ['insurance'], write: (name, capital, chain) => `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.` },
+  { words: ['launchpad'], write: (name, capital, chain) => `Stake $${capital} through ${name} to qualify for its next allocation on ${chain}.` },
+  { words: ['index'], write: (name, capital, chain) => `Buy $${capital} of the ${name} index token on ${chain} and hold it.` },
+  { words: ['option'], write: (name, capital, chain) => `Deposit $${capital} as collateral for one options position on ${name}.` },
+  { words: ['privacy'], write: (name, capital, chain) => `Route $${capital} through ${name}'s private pool on ${chain} and keep the receipt.` },
+  { words: ['ai agent', 'decentralized ai'], write: (name, capital, chain) => `Run one agent task on ${name} with $${capital} of credits on ${chain}.` },
+  { words: ['payment'], write: (name, capital, chain) => `Route $${capital} of spending through ${name} on ${chain} and keep the receipt.` },
+];
+
+/** The fallback main position, for a category no rule names. */
+const ACTION_FALLBACK = (name: string, capital: number, chain: string): string =>
+  `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
+
+/** The first rule whose words appear in the lowercased category, or null. */
+function firstRule<T extends { words: string[] }>(rules: T[], category: string): T | null {
+  const c = category.toLowerCase();
+  for (const rule of rules) {
+    if (rule.words.some((w) => c.includes(w))) return rule;
+  }
+  return null;
+}
+
 /** The category's main position, in the words a farmer can follow. */
 function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
-  const c = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
-  if (c.includes('bridge')) return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
-  if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
-  if (c.includes('perpetual') || c.includes('derivative')) return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
-  if (c.includes('prediction')) return `Fund $${capital} and place one market position on ${name}.`;
-  if (c.includes('curator') || c.includes('allocator')) return `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`;
-  if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`;
-  if (c.includes('rwa')) return `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`;
-  if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`;
-  if (c.includes('launchpad')) return `Stake $${capital} through ${name} to qualify for its next allocation on ${chain}.`;
-  if (c.includes('index')) return `Buy $${capital} of the ${name} index token on ${chain} and hold it.`;
-  if (c.includes('option')) return `Deposit $${capital} as collateral for one options position on ${name}.`;
-  if (c.includes('privacy')) return `Route $${capital} through ${name}'s private pool on ${chain} and keep the receipt.`;
-  if (c.includes('ai agent') || c.includes('decentralized ai')) return `Run one agent task on ${name} with $${capital} of credits on ${chain}.`;
-  if (c.includes('payment')) return `Route $${capital} of spending through ${name} on ${chain} and keep the receipt.`;
-  return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
+  const rule = firstRule(ACTION_RULES, p.category ?? '');
+  return rule === null ? ACTION_FALLBACK(p.name, capital, chain) : rule.write(p.name, capital, chain);
 }
+
+/**
+ * The weekly activity's rules, in precedence order: the curator rule precedes the perpetual
+ * rule here, unlike the main-position list, and categories without a weekly variant fall
+ * through to the generic step.
+ */
+const WEEKLY_RULES: PlanRule[] = [
+  { words: ['lend', 'cdp', 'collateral'], write: (name) => `Borrow a small amount against the supply on ${name}, then repay it the same week.` },
+  { words: ['dex', 'yield', 'leveraged farm'], write: (name, capital, chain) => `Swap a small amount through ${name}'s main pool on ${chain} to keep the position active.` },
+  { words: ['bridge'], write: (name) => `Bridge a small amount back the other way through ${name} so both directions are used.` },
+  { words: ['staking', 'restak'], write: (name) => `Restake the staking rewards ${name} paid out, instead of leaving them idle.` },
+  { words: ['curator', 'allocator'], write: (name) => `Read the vault's latest curator report on ${name} and move the funds only if the strategy changed.` },
+  { words: ['perpetual', 'derivative'], write: (name) => `Close and reopen the hedge on ${name} once, so the position shows fresh activity.` },
+  { words: ['prediction'], write: (name) => `Settle one market on ${name} and place the next position with the winnings.` },
+  { words: ['rwa'], write: (name) => `Check the yield ${name} paid this week and leave it compounding in the same asset.` },
+  { words: ['insurance'], write: (name) => `Check the cover ${name} sold this week and renew it before it lapses.` },
+];
+
+/** The fallback weekly activity, for a category no rule names. */
+const WEEKLY_FALLBACK = (name: string): string =>
+  `Make one qualifying action this week on ${name}, such as a deposit, a borrow, a swap or a vote.`;
 
 /** The category's weekly activity: the second qualifying action, different from the first. */
 function weeklyFor(p: SnapshotProtocol, chain: string): string {
-  const c = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Borrow a small amount against the supply on ${name}, then repay it the same week.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Swap a small amount through ${name}'s main pool on ${chain} to keep the position active.`;
-  if (c.includes('bridge')) return `Bridge a small amount back the other way through ${name} so both directions are used.`;
-  if (c.includes('staking') || c.includes('restak')) return `Restake the staking rewards ${name} paid out, instead of leaving them idle.`;
-  if (c.includes('curator') || c.includes('allocator')) return `Read the vault's latest curator report on ${name} and move the funds only if the strategy changed.`;
-  if (c.includes('perpetual') || c.includes('derivative')) return `Close and reopen the hedge on ${name} once, so the position shows fresh activity.`;
-  if (c.includes('prediction')) return `Settle one market on ${name} and place the next position with the winnings.`;
-  if (c.includes('rwa')) return `Check the yield ${name} paid this week and leave it compounding in the same asset.`;
-  if (c.includes('insurance')) return `Check the cover ${name} sold this week and renew it before it lapses.`;
-  return `Make one qualifying action this week on ${name}, such as a deposit, a borrow, a swap or a vote.`;
+  const rule = firstRule(WEEKLY_RULES, p.category ?? '');
+  return rule === null ? WEEKLY_FALLBACK(p.name) : rule.write(p.name, 0, chain);
 }
 
 /**
@@ -591,14 +678,49 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   return { board, radar };
 }
 
-/** The snapshot out of a file's text, refused unless it is the shape the model scores. */
-export function parseSnapshot(text: string): Snapshot {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    throw new SnapshotError('snapshot.json is not JSON');
+/** One JSON value as a string, or null when it is absent or not a string. */
+function asString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+/** One JSON value as a finite number, or null when it is absent or not a finite number. */
+function asNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** One JSON value as a list of strings, dropping anything that is not a string. */
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((c): c is string => typeof c === 'string') : [];
+}
+
+/**
+ * One protocol out of a JSON value, refused unless it carries the fields the model scores.
+ * A missing or mistyped optional field reads as null (no record) rather than as zero: the
+ * model must never invent a market cap, a listing date or a token symbol the snapshot
+ * does not carry.
+ */
+function parseProtocol(v: unknown, i: number): SnapshotProtocol {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new SnapshotError(`snapshot.json's protocol ${i} is not an object`);
+  const p = v as Record<string, unknown>;
+  if (typeof p.slug !== 'string' || typeof p.name !== 'string' || typeof p.tvl_usd !== 'number' || !Number.isFinite(p.tvl_usd)) {
+    throw new SnapshotError(`snapshot.json's protocol ${i} lacks a slug, a name or a TVL`);
   }
+  return {
+    slug: p.slug,
+    name: p.name,
+    category: asString(p.category),
+    chains: asStringList(p.chains),
+    tvl_usd: p.tvl_usd,
+    change_7d: asNumber(p.change_7d),
+    mcap_usd: asNumber(p.mcap_usd),
+    listed_at: asString(p.listed_at),
+    gecko_id: asString(p.gecko_id),
+    symbol: asString(p.symbol),
+  };
+}
+
+/** The snapshot document's shape, refused unless it carries the fields the model scores. */
+function checkSnapshotShape(raw: unknown): Record<string, unknown> {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new SnapshotError('snapshot.json is not a JSON object');
   const o = raw as Record<string, unknown>;
   if (typeof o.as_of !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.as_of)) throw new SnapshotError('snapshot.json has no as_of date');
@@ -607,25 +729,19 @@ export function parseSnapshot(text: string): Snapshot {
   if (!Array.isArray(o.protocols)) throw new SnapshotError('snapshot.json has no protocols array');
   if (!Array.isArray(o.watchlist) || o.watchlist.some((s) => typeof s !== 'string')) throw new SnapshotError('snapshot.json has no watchlist of slugs');
   if (new Set(o.watchlist as string[]).size !== (o.watchlist as string[]).length) throw new SnapshotError('snapshot.json lists a watchlist slug twice');
-  const protocols = o.protocols.map((v, i) => {
-    if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new SnapshotError(`snapshot.json's protocol ${i} is not an object`);
-    const p = v as Record<string, unknown>;
-    if (typeof p.slug !== 'string' || typeof p.name !== 'string' || typeof p.tvl_usd !== 'number' || !Number.isFinite(p.tvl_usd)) {
-      throw new SnapshotError(`snapshot.json's protocol ${i} lacks a slug, a name or a TVL`);
-    }
-    return {
-      slug: p.slug,
-      name: p.name,
-      category: typeof p.category === 'string' ? p.category : null,
-      chains: Array.isArray(p.chains) ? p.chains.filter((c): c is string => typeof c === 'string') : [],
-      tvl_usd: p.tvl_usd,
-      change_7d: typeof p.change_7d === 'number' && Number.isFinite(p.change_7d) ? p.change_7d : null,
-      mcap_usd: typeof p.mcap_usd === 'number' && Number.isFinite(p.mcap_usd) ? p.mcap_usd : null,
-      listed_at: typeof p.listed_at === 'string' ? p.listed_at : null,
-      gecko_id: typeof p.gecko_id === 'string' ? p.gecko_id : null,
-      symbol: typeof p.symbol === 'string' ? p.symbol : null,
-    };
-  });
+  return o;
+}
+
+/** The snapshot out of a file's text, refused unless it is the shape the model scores. */
+export function parseSnapshot(text: string): Snapshot {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new SnapshotError('snapshot.json is not JSON');
+  }
+  const o = checkSnapshotShape(raw);
+  const protocols = o.protocols.map(parseProtocol);
   return {
     as_of: o.as_of,
     source: o.source,

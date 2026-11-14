@@ -230,21 +230,25 @@
     );
   }
 
+  // One filter select: an "all" option plus one per value, the current value selected,
+  // and a change that writes the hash and re-renders. The category and chain filters
+  // share this shape, so they share the builder.
+  function filterSelect(id, label, allLabel, values, current, onPick) {
+    var select = el('select', { id: id, 'aria-label': label },
+      el('option', { value: 'all', text: allLabel }),
+      values.map(function (v) { return el('option', { value: v, text: v, selected: v === current ? 'selected' : null }); })
+    );
+    select.addEventListener('change', function () { onPick(select.value); writeHash(); render(); });
+    return select;
+  }
+
   function controls() {
     var categories = Array.from(new Set(DATA.rows.map(function (r) { return r.category || 'Other'; }))).sort();
     var chains = Array.from(new Set(DATA.rows.reduce(function (acc, r) { return acc.concat(r.chains || []); }, []))).sort();
     var search = el('input', { type: 'search', id: 'q', placeholder: 'Search name, category or chain', value: state.q, 'aria-label': 'Search the board' });
     search.addEventListener('input', function () { state.q = search.value; writeHash(); render(); });
-    var catSelect = el('select', { id: 'category', 'aria-label': 'Filter by category' },
-      el('option', { value: 'all', text: 'All categories' }),
-      categories.map(function (c) { return el('option', { value: c, text: c, selected: c === state.category ? 'selected' : null }); })
-    );
-    catSelect.addEventListener('change', function () { state.category = catSelect.value; writeHash(); render(); });
-    var chainSelect = el('select', { id: 'chain', 'aria-label': 'Filter by chain' },
-      el('option', { value: 'all', text: 'All chains' }),
-      chains.map(function (c) { return el('option', { value: c, text: c, selected: c === state.chain ? 'selected' : null }); })
-    );
-    chainSelect.addEventListener('change', function () { state.chain = chainSelect.value; writeHash(); render(); });
+    var catSelect = filterSelect('category', 'Filter by category', 'All categories', categories, state.category, function (v) { state.category = v; });
+    var chainSelect = filterSelect('chain', 'Filter by chain', 'All chains', chains, state.chain, function (v) { state.chain = v; });
     var pre = el('button', { type: 'button', 'aria-pressed': state.tab === 'pre-token' ? 'true' : 'false', text: 'Pre-token', onclick: function () { state.tab = 'pre-token'; render(); } });
     var live = el('button', { type: 'button', 'aria-pressed': state.tab === 'live' ? 'true' : 'false', text: 'Live token', onclick: function () { state.tab = 'live'; render(); } });
     return el('div', { class: 'controls' },
@@ -282,6 +286,36 @@
     );
   }
 
+  // One board row: the rank, the protocol, its figures and the bar scaled to the
+  // largest implied value among the rows shown. The row is focusable so the keyboard
+  // can move across the board, and it carries its slug for the detail drawer.
+  function boardRow(r, max) {
+    var growth = r.change_7d === null ? 'n/a' : fmtPct(r.change_7d);
+    var growthClass = r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg';
+    return el('tr', {
+      class: r.rank === 1 ? 'top1' : null,
+      'data-selected': state.selected === r.slug ? 'true' : 'false',
+      'data-slug': r.slug,
+      tabindex: '0',
+      onclick: function () { openDetail(r.slug); },
+      onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
+    },
+      el('td', { class: 'rank-num', text: String(r.rank) }),
+      el('td', null, el('div', { class: 'name' },
+        el('b', { text: r.name }),
+        el('span', { class: 'sub', text: (r.category || 'Other') + ' on ' + (r.chains && r.chains.length ? r.chains.slice(0, 2).join(', ') : 'an unnamed chain') + (r.chains && r.chains.length > 2 ? ' +' + (r.chains.length - 2) : '') })
+      )),
+      el('td', { class: 'num', text: fmtUsd(r.tvl_usd) }),
+      el('td', { class: 'num ' + growthClass, text: growth }),
+      el('td', { class: 'num', text: fmtAge(r.age_days) }),
+      el('td', null, el('div', { class: 'implied' },
+        el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { class: r.rank === 1 ? 'gold' : null, style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
+        el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
+      )),
+      el('td', null, el('span', { class: 'status', text: 'no token' }))
+    );
+  }
+
   function boardTable() {
     var list = sortedRows(rows());
     if (list.length === 0) {
@@ -295,36 +329,11 @@
     // a table sorted by name or TVL still shows the bars in proportion.
     var max = Math.max.apply(null, list.map(function (r) { return r.implied_value_usd; })) || 1;
     var tbody = el('tbody');
-    list.forEach(function (r) {
-      var growth = r.change_7d === null ? 'n/a' : fmtPct(r.change_7d);
-      var growthClass = r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg';
-      var tr = el('tr', {
-        class: r.rank === 1 ? 'top1' : null,
-        'data-selected': state.selected === r.slug ? 'true' : 'false',
-        tabindex: '0',
-        onclick: function () { openDetail(r.slug); },
-        onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
-      },
-        el('td', { class: 'rank-num', text: String(r.rank) }),
-        el('td', null, el('div', { class: 'name' },
-          el('b', { text: r.name }),
-          el('span', { class: 'sub', text: (r.category || 'Other') + ' on ' + (r.chains && r.chains.length ? r.chains.slice(0, 2).join(', ') : 'an unnamed chain') + (r.chains && r.chains.length > 2 ? ' +' + (r.chains.length - 2) : '') })
-        )),
-        el('td', { class: 'num', text: fmtUsd(r.tvl_usd) }),
-        el('td', { class: 'num ' + growthClass, text: growth }),
-        el('td', { class: 'num', text: fmtAge(r.age_days) }),
-        el('td', null, el('div', { class: 'implied' },
-          el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { class: r.rank === 1 ? 'gold' : null, style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
-          el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
-        )),
-        el('td', null, el('span', { class: 'status', text: 'no token' }))
-      );
-      tbody.appendChild(tr);
-    });
+    list.forEach(function (r) { tbody.appendChild(boardRow(r, max)); });
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },
         el('table', null,
-          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Select a row for its model and farm plan.' }),
+          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Select a row for its model and farm plan. Arrow keys move between rows, Enter opens the detail.' }),
           el('thead', null, el('tr', null,
             sortHeader('implied', 'Rank'),
             sortHeader('name', 'Protocol'),
@@ -493,7 +502,34 @@
     readHash();
     render();
   });
-  window.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && dialog.open) dialog.close();
-  });
+  // Keyboard navigation for the board: ArrowUp/ArrowDown move the focus between the
+  // rows on screen, Enter opens the focused row's detail drawer, Escape closes it.
+  // The arrows are ignored while the focus is in a text field or a select, so typing
+  // a search or picking a filter never jumps the table. On the Live token tab there
+  // is nothing to select, so the arrows stay quiet there too.
+  function visibleRows() {
+    return Array.prototype.slice.call(document.querySelectorAll('#board tbody tr'));
+  }
+  function moveSelection(delta) {
+    if (state.tab !== 'pre-token') return;
+    var rows = visibleRows();
+    if (rows.length === 0) return;
+    var index = -1;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i] === document.activeElement) { index = i; break; }
+    }
+    var next = index < 0 ? (delta > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, index + delta));
+    rows[next].focus();
+  }
+  function keyboardNav(e) {
+    if (dialog.open) {
+      if (e.key === 'Escape') dialog.close();
+      return;
+    }
+    var tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveSelection(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveSelection(-1); }
+  }
+  window.addEventListener('keydown', keyboardNav);
 })();
