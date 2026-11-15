@@ -1,4 +1,4 @@
-/* Token Radar, radar-3: light editorial page — warm paper, ink type, pine-green accent. */
+/* Token Radar, radar-5: light editorial page — warm paper, ink type, pine-green accent. */
 :root{--paper:#f6f2e8;--card:#fffdf6;--ink:#1d1a13;--muted:#6f695a;--line:#ddd4bd;--line-soft:#e9e2cf;--pine:#1e5c46;--brass:#9a7418;--pos:#1e7a3c;--neg:#b3341f;--serif:Georgia,'Iowan Old Style','Times New Roman',serif;--sans:system-ui,-apple-system,'Segoe UI',sans-serif;--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace}
 *{box-sizing:border-box}
 html{background:var(--paper)}

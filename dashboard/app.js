@@ -1,6 +1,4 @@
-// Token Radar, radar-4 dashboard. Reads window.RADAR (written beside dashboard/ by main.ts)
-// and renders the board, the fitted surface, a filterable table with a band on every row,
-// a detail drawer, and the fit's report card. No network: all data is in data.js.
+// Token Radar, radar-5 dashboard. Renders the board from window.RADAR (data.js, written by main.ts). No network.
 (function () {
   'use strict';
 
@@ -38,16 +36,18 @@
   }
   function impliedOf(row, model) {
     var f = DATA.fit;
-    var age = row.age_days ?? model.unknown_age_days;
+    var age = row.age_days ?? f.age_imputed_days;
     var logAge = Math.log10(age + 1);
     var growth = Math.log1p(clamp(row.change_7d ?? 0, model.growth_floor, model.growth_cap) / 100);
-    // The surface value is the fit at this TVL, mean age and zero growth; the age and
-    // growth factors are the fitted moves from that centre.
-    var fit = Math.pow(10, f.intercept + f.elasticity * Math.log10(row.tvl_usd) + f.age_coef * f.mean_log_age);
+    var logChains = Math.log10(Math.max(1, (row.chains || []).length));
+    // The surface value is the fit at this TVL, mean age, mean chain breadth and zero
+    // growth; the age, growth and chains factors are the fitted moves from that centre.
+    var fit = Math.pow(10, f.intercept + f.elasticity * Math.log10(row.tvl_usd) + f.age_coef * f.mean_log_age + f.chains_coef * f.mean_log_chains);
     var ageMult = Math.pow(10, f.age_coef * (logAge - f.mean_log_age));
     var growthMult = Math.pow(10, f.growth_coef * growth);
+    var chainsMult = Math.pow(10, f.chains_coef * (logChains - f.mean_log_chains));
     var cat = categoryMultiplier(row.category);
-    return { fit: fit, age: ageMult, growth: growthMult, category: cat, implied: Math.max(1, Math.round(fit * cat * ageMult * growthMult)) };
+    return { fit: fit, age: ageMult, growth: growthMult, chains: chainsMult, category: cat, implied: Math.max(1, Math.round(fit * cat * ageMult * growthMult * chainsMult)) };
   }
 
   function el(tag, attrs) {
@@ -246,8 +246,7 @@
     );
   }
 
-  // The fit chart: predicted against actual, the diagonal a perfect prediction,
-  // the band shaded around it.
+  // The fit chart: predicted against actual, diagonal a perfect prediction.
   function scatterChart() {
     var W = 360, H = 252, L = 46, R = 8, T = 8, B = 28;
     var x0 = 6, x1 = 9, y0 = 5, y1 = 9.2;
@@ -293,11 +292,11 @@
       el('div', null,
         el('p', { class: 'eyebrow', text: 'Token launch radar · snapshot ' + DATA.as_of }),
         el('h1', { html: 'The launches that have not happened yet, <em>priced from the ones that have.</em>' }),
-        el('p', { class: 'lede-text', html: 'Every protocol in the snapshot that records no token, ranked by what a launch would be worth. Priced from the market&rsquo;s own surface: a log-log fit of market cap on TVL, age and weekly growth over the ' + fit.n + ' priced protocols. Half of them land within &times;' + fit.band_lo.toFixed(2) + ' to &times;' + fit.band_hi.toFixed(2) + ' of the surface — so every row shows its range.' })
+        el('p', { class: 'lede-text', html: 'Every protocol in the snapshot that records no token, ranked by what a launch would be worth. Priced from the market&rsquo;s own surface: a log-log fit of market cap on TVL, age, weekly growth and chain breadth over the ' + fit.n + ' priced protocols. Half of them land within &times;' + fit.band_lo.toFixed(2) + ' to &times;' + fit.band_hi.toFixed(2) + ' of the surface — so every row shows its range.' })
       ),
       el('aside', { class: 'pricing', 'aria-label': 'How a launch is priced' },
         el('h2', { text: 'How a launch is priced' }),
-        el('div', { class: 'formula', text: 'value = 10^(' + fit.intercept.toFixed(2) + ' + ' + fit.elasticity.toFixed(3) + ' x logTVL' + sgn(fit.age_coef, 2) + ' x logAge' + sgn(fit.growth_coef, 2) + ' x ln(1+growth)) x category' }),
+        el('div', { class: 'formula', text: 'value = 10^(' + fit.intercept.toFixed(2) + ' + ' + fit.elasticity.toFixed(3) + ' x logTVL' + sgn(fit.age_coef, 2) + ' x logAge' + sgn(fit.growth_coef, 2) + ' x ln(1+growth)' + sgn(fit.chains_coef, 2) + ' x logChains) x category' }),
         scatterChart(),
         el('div', { class: 'fit-stats' },
           el('div', { class: 'fit-stat' }, el('b', { text: String(fit.n) }), el('span', { text: 'priced comparables' })),
@@ -404,7 +403,6 @@
     );
   }
 
-  // The distribution of the rows on screen; it follows the filters.
   function histogram(list) {
     if (list.length === 0) return null;
     var values = list.map(function (r) { return Math.log10(Math.max(1, r.implied_value_usd)); });
@@ -447,8 +445,7 @@
     );
   }
 
-  // One board row: the implied value as a dot with its band on a fixed log scale
-  // ($1M to $1B), so every row's range is comparable with every other row's.
+  // One board row: the implied value as a dot with its band on a fixed $1M–$1B log scale.
   function rangeCell(r) {
     var pos = function (v) { return clamp((Math.log10(Math.max(1, v)) - 6) / 3 * 100, 0, 100); };
     var lo = pos(r.implied_lo_usd), hi = pos(r.implied_hi_usd), mid = pos(r.implied_value_usd);
@@ -502,7 +499,7 @@
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },
         el('table', null,
-          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. The dot is the model\u2019s centre, the band the range half of priced tokens land in. Arrow keys move, Enter opens, C marks a row to compare.' }),
+          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest first. The dot is the model\u2019s centre, the band the range half of priced tokens land in. Arrow keys move, Enter opens, C marks a row to compare.' }),
           el('thead', null, el('tr', null,
             sortHeader('implied', 'Rank'),
             sortHeader('name', 'Protocol'),
@@ -535,7 +532,7 @@
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },
         el('table', null,
-          el('caption', { class: 'sub', text: 'Token live: these protocols already trade, so their market cap is a fact, not a model. Set aside from the ranking — the ' + DATA.fit.n + ' the surface was fitted on are the comparables behind every implied value.' }),
+          el('caption', { class: 'sub', text: 'Token live: these protocols already trade, so their market cap is a fact. Set aside from the ranking — the ' + DATA.fit.n + ' the surface was fitted on are the comparables behind every implied value.' }),
           el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Status' }), el('th', { scope: 'col', text: 'Protocol' }), el('th', { scope: 'col', class: 'num', text: 'TVL' }), el('th', { scope: 'col', class: 'num', text: '7d' }), el('th', { scope: 'col', class: 'num', text: 'Market cap' }), el('th', { scope: 'col', class: 'num', text: 'x TVL' }))),
           tbody
         )
@@ -563,16 +560,16 @@
     var note = concentrationNote();
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How a launch is priced' }),
-      el('div', { class: 'formula', text: 'implied = round( 10^(' + fit.intercept.toFixed(3) + ' + ' + fit.elasticity.toFixed(3) + ' x log10(tvl_usd)' + sgn(fit.age_coef, 3) + ' x log10(age_days+1)' + sgn(fit.growth_coef, 3) + ' x ln(1+clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ')/100)) x category )' }),
-      el('p', { class: 'sub', text: 'The surface is a multiple regression of log10(market cap) on log10(TVL), log10(age in days + 1) and ln(1 + the seven-day TVL change), over the ' + fit.n + ' priced protocols, after two exclusions: exchange tokens, and ' + c.outliers + ' outliers whose market cap sits more than 10x above TVL or below 2% of it. Every coefficient is computed on every run. The category factor is each category\u2019s mean log residual from the surface, shrunk toward 1 with a prior of ' + m.shrink_prior + ' protocols and clamped to [' + m.multiple_min + ', ' + m.multiple_max + ']; no priced protocol means 1.' }),
-      el('p', { class: 'sub', text: 'Age and growth are fitted effects: the snapshot\u2019s own data says a longer wait with no token is worth less per dollar of TVL, and a rising TVL is worth more than a flat one. Growth enters as ln(1 + growth) because growth is multiplicative — a raw term would let one hot week multiply a protocol tenfold. An unknown listing date counts as ' + m.unknown_age_days + ' days. The board ranks every protocol the watchlist rule leaves rankable — pre-token, not wrapped, staked or bridged, not an exchange, not a versioned pool — ' + DATA.board_size + ' rows, ' + DATA.early_size + ' below the floor.' }),
+      el('div', { class: 'formula', text: 'implied = round( 10^(' + fit.intercept.toFixed(3) + ' + ' + fit.elasticity.toFixed(3) + ' x log10(tvl_usd)' + sgn(fit.age_coef, 3) + ' x log10(age_days+1)' + sgn(fit.growth_coef, 3) + ' x ln(1+clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ')/100)' + sgn(fit.chains_coef, 3) + ' x log10(chains)) x category )' }),
+      el('p', { class: 'sub', text: 'The surface is a multiple regression of log10(market cap) on log10(TVL), log10(age in days + 1), ln(1 + the seven-day TVL change) and log10(the chains named), over the ' + fit.n + ' priced protocols, after two exclusions: exchange tokens, and ' + c.outliers + ' outliers whose market cap sits more than 7x above TVL or below 3% of it. Every coefficient is computed on every run. The category factor is each category\u2019s mean log residual from the surface, shrunk toward 1 with a prior of ' + m.shrink_prior + ' protocols and clamped to [' + m.multiple_min + ', ' + m.multiple_max + ']; no priced protocol means 1.' }),
+      el('p', { class: 'sub', text: 'Age, growth and chain breadth are fitted effects: the snapshot\u2019s own data says a rising TVL is worth more than a flat one, and TVL spread thin across many chains is worth less per dollar. Growth enters as ln(1 + growth) because growth is multiplicative, capped at ±60% — the priced protocols never saw a week above +3%. An unknown listing date counts as the comparables\u2019 median age, ' + Math.round(fit.age_imputed_days) + ' days. The board ranks every protocol the watchlist rule leaves rankable — pre-token, not wrapped, staked or bridged, not an exchange, not a versioned pool — ' + DATA.board_size + ' rows, ' + DATA.early_size + ' below the floor.' }),
       el('h3', { text: 'Report card' }),
       el('div', { class: 'report' },
         el('div', { class: 'report-cell' }, el('b', { text: 'x' + fit.band_lo.toFixed(2) + '–x' + fit.band_hi.toFixed(2) }), el('span', { text: 'half of priced tokens land inside this band around the surface' })),
         el('div', { class: 'report-cell' }, el('b', { text: bt.median_abs_pct_error.toFixed(1) + '%' }), el('span', { text: 'median error of the ' + bt.folds + '-fold cross-check on ' + bt.n + ' priced protocols' })),
         el('div', { class: 'report-cell' }, el('b', { text: (bt.within_2x * 100).toFixed(1) + '%' }), el('span', { text: 'of cross-check predictions land within 2x' }))
       ),
-      el('p', { class: 'calib-note', text: 'The cross-check refits the surface on four fifths of the priced protocols and tests it on the fifth, five times — out-of-sample, so it is the honest number. At R² ' + fit.r2.toFixed(2) + ' it is a rough guide, which is why every row carries its range.' }),      el('h3', { text: 'Category factors' }),
+      el('p', { class: 'calib-note', text: 'The cross-check refits the surface on four fifths and tests it on the fifth, five times — out-of-sample, so it is the honest number. At R² ' + fit.r2.toFixed(2) + ' it is a rough guide, which is why every row carries its range.' }),      el('h3', { text: 'Category factors' }),
       el('table', { class: 'calib' },
         el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Priced' }), el('th', { scope: 'col', text: 'Mean log residual' }), el('th', { scope: 'col', text: 'Factor used' }))),
         el('tbody', null, DATA.categories.map(function (f) {
@@ -588,7 +585,7 @@
       note ? el('h3', { text: 'Top-ten concentration' }) : null,
       note ? el('p', { class: 'calib-note', text: note }) : null,
       el('h3', { text: 'What the board does not claim' }),
-      el('p', { class: 'calib-note', text: 'A protocol on this board records no token — never that it has none, because a token may exist that the snapshot does not carry. The board does not predict whether or when a token is issued, and an implied value is this entry\u2019s own claim.' })
+      el('p', { class: 'calib-note', text: 'A protocol on this board records no token — never that it has none, because the snapshot may miss one. The board does not predict whether or when a token is issued, and an implied value is this entry\u2019s own claim.' })
     );
   }
 
@@ -604,6 +601,7 @@
       ['Category factor (' + (row.category || 'Other') + ')', recomputed.category.toFixed(3) + 'x'],
       ['Age effect (' + fmtAge(row.age_days) + ' with no token)', recomputed.age.toFixed(3) + 'x'],
       ['Growth effect (' + fmtPct(row.change_7d) + ' in 7 days)', recomputed.growth.toFixed(3) + 'x'],
+      ['Chain breadth (' + (row.chains || []).length + ' chains)', recomputed.chains.toFixed(3) + 'x'],
       ['Uncertainty band', fmtUsd(row.implied_lo_usd) + ' – ' + fmtUsd(row.implied_hi_usd)]
     ];
     return el('section', { class: 'detail-section' },
@@ -659,17 +657,18 @@
     }
   }
 
-  // The side-by-side view: two protocols, each model factor on its own row with the
-  // leader marked, a verdict, and both farm plans.
+  // The side-by-side view: each model factor on its own row, leader marked.
   function sideBySide(a, b) {
     var defs = [
       ['tvl', 'Total value locked', a.tvl_usd, b.tvl_usd, fmtUsd(a.tvl_usd), fmtUsd(b.tvl_usd)],
       ['growth', 'Seven-day TVL change', a.change_7d ?? 0, b.change_7d ?? 0, fmtPct(a.change_7d), fmtPct(b.change_7d)],
       ['age', 'Days with no token on record', a.age_days ?? 365, b.age_days ?? 365, fmtAge(a.age_days), fmtAge(b.age_days)],
+      ['chains', 'Chains the protocol names', a.chains.length, b.chains.length, String(a.chains.length), String(b.chains.length)],
       ['fit', 'Surface value', a.fit_value, b.fit_value, fmtUsd(a.fit_value), fmtUsd(b.fit_value)],
       ['categoryMult', 'Category multiplier', a.category_multiplier, b.category_multiplier, a.category_multiplier.toFixed(3) + 'x', b.category_multiplier.toFixed(3) + 'x'],
       ['ageMult', 'Age multiplier', a.age_multiplier, b.age_multiplier, a.age_multiplier.toFixed(3) + 'x', b.age_multiplier.toFixed(3) + 'x'],
       ['growthMult', 'Growth multiplier', a.growth_multiplier, b.growth_multiplier, a.growth_multiplier.toFixed(3) + 'x', b.growth_multiplier.toFixed(3) + 'x'],
+      ['chainsMult', 'Chain breadth multiplier', a.chains_multiplier, b.chains_multiplier, a.chains_multiplier.toFixed(3) + 'x', b.chains_multiplier.toFixed(3) + 'x'],
       ['implied', 'Implied value', a.implied_value_usd, b.implied_value_usd, fmtUsd(a.implied_value_usd), fmtUsd(b.implied_value_usd)]
     ];
     return defs.map(function (d) {
@@ -677,7 +676,6 @@
     });
   }
 
-  // One sentence on the pair: who leads on more factors, and by how much.
   function compareVerdict(a, b, entries) {
     var firstWins = 0;
     var secondWins = 0;
@@ -687,15 +685,14 @@
     });
     var gap = Math.max(a.implied_value_usd, b.implied_value_usd) / Math.max(1, Math.min(a.implied_value_usd, b.implied_value_usd));
     var leadText = firstWins === secondWins
-      ? 'Neither leads: the two split the eight factors evenly.'
-      : (firstWins > secondWins ? a.name : b.name) + ' leads on ' + Math.max(firstWins, secondWins) + ' of the eight factors.';
+      ? 'Neither leads: the two split the ten factors evenly.'
+      : (firstWins > secondWins ? a.name : b.name) + ' leads on ' + Math.max(firstWins, secondWins) + ' of the ten factors.';
     var valueText = a.implied_value_usd === b.implied_value_usd
       ? 'Both protocols carry the same implied value.'
       : (a.implied_value_usd > b.implied_value_usd ? a.name : b.name) + ' carries the larger implied value — ' + gap.toFixed(1) + ' times the other.';
     return leadText + ' ' + valueText;
   }
 
-  // The two picked rows, or null when the comparison is not exactly two rows.
   function comparePicked() {
     if (state.compare.length !== 2) return null;
     var first = DATA.rows.filter(function (r) { return r.slug === state.compare[0]; })[0];
@@ -716,7 +713,6 @@
     render();
   }
 
-  // Empty the comparison, if there is one; a no-op otherwise.
   function compareClear() {
     if (state.compare.length === 0) return;
     state.compare = [];
@@ -724,8 +720,7 @@
     render();
   }
 
-  // One half of the comparison: rank and value, factor rows with the ones it leads
-  // highlighted, and its full farm plan.
+  // One half of the comparison: rank, value, factor rows, farm plan.
   function compareColumn(row, side, entries) {
     return el('div', { class: 'compare-col' },
       el('h3', { text: 'Rank ' + row.rank + ' · ' + fmtUsd(row.implied_value_usd) }),
@@ -740,8 +735,7 @@
     );
   }
 
-  // The comparison panel: a heading naming both protocols, the verdict, and the two
-  // columns side by side. Nothing renders until the pair is complete.
+  // The comparison panel: nothing renders until the pair is complete.
   function comparePanel() {
     var pair = comparePicked();
     if (pair === null) return null;
@@ -797,14 +791,12 @@
 
   readHash();
   render();
-  // A hash change from a link, the back button or a fresh URL re-reads the state.
   window.addEventListener('hashchange', function () {
     state.q = ''; state.category = 'all'; state.chain = 'all'; state.mechanism = 'all'; state.move = 'any'; state.view = 'all'; state.tab = 'pre-token'; state.selected = null; state.compare = [];
     readHash();
     render();
   });
-  // Keyboard navigation: arrows move between the rows on screen, Enter opens the
-  // focused row's detail, Escape closes it or clears a comparison. Ignored in fields.
+  // Keyboard navigation: arrows move, Enter opens, Escape closes. Ignored in fields.
   function visibleRows() {
     return Array.prototype.slice.call(document.querySelectorAll('#board tbody tr'));
   }

@@ -1,4 +1,4 @@
-// The token radar's model, version radar-4: one sealed snapshot in, one ranked board out.
+// The token radar's model, version radar-5: one sealed snapshot in, one ranked board out.
 //
 // The board ranks every protocol the snapshot's own rules leave rankable: all 40 watchlist
 // slugs, plus every other pre-token protocol that is not a wrapped, staked or bridged product,
@@ -10,19 +10,27 @@
 // priced protocols — never from a hardcoded list of names and never from a hardcoded fitted
 // constant. The fit runs in three steps:
 //
-//   1. The surface. A multiple regression of log10(market cap) on three of the snapshot's
-//      own figures — log10(TVL), log10(age in days + 1), and log(1 + the seven-day TVL
-//      change) — over the snapshot's priced protocols, with two exclusions: exchange tokens
-//      (an exchange's token is not a protocol's) and outliers whose market cap sits more
-//      than 10x above TVL or below 2% of it. Every coefficient is computed from the snapshot
-//      on every run, so age and growth are fitted effects now, not stated factors: the
-//      snapshot's own data says how much each is worth. TVL and age enter centred at their
-//      comparables means, so each factor reads 1.0 for a typical protocol and the intercept
-//      is the value of a protocol at mean TVL, mean age and zero growth. Growth enters as
-//      log(1 + growth) because growth is multiplicative — and because the priced protocols
-//      span only -40% to +3% in a week, a raw growth term would extrapolate wildly on a
-//      protocol that doubled its TVL; the log form keeps one hot week from multiplying a
-//      protocol tenfold.
+//   1. The surface. A multiple regression of log10(market cap) on four of the snapshot's
+//      own figures — log10(TVL), log10(age in days + 1), log(1 + the seven-day TVL
+//      change), and log10(the chains the protocol names) — over the snapshot's priced
+//      protocols, with two exclusions: exchange tokens (an exchange's token is not a
+//      protocol's) and outliers whose market cap sits more than 7x above TVL or below 3%
+//      of it. Every coefficient is computed from the snapshot on every run, so age,
+//      growth and chain breadth are fitted effects now, not stated factors: the
+//      snapshot's own data says how much each is worth. TVL, age and chain breadth enter
+//      centred at their comparables means, so each factor reads 1.0 for a typical
+//      protocol and the intercept is the value of a protocol at mean TVL, mean age, mean
+//      chain breadth and zero growth. Growth enters as log(1 + growth) because growth is
+//      multiplicative — and because the priced protocols span only -40% to +3% in a week,
+//      a raw growth term would extrapolate wildly on a protocol that doubled its TVL;
+//      the log form keeps one hot week from multiplying a protocol tenfold. The growth
+//      clamp is symmetric at plus or minus 60%: the fit has never seen a priced week
+//      above +3%, so a protocol whose TVL jumped fortyfold in a week — a feed
+//      reclassification, not momentum — must not buy a top-ten rank on the strength of
+//      one number. A protocol with no listing date takes the median known age of the
+//      comparables, computed from the fit's own set on every run: a fixed one-year guess
+//      would sit three times too young on this snapshot, and a fold's imputation must
+//      never leak the held-out fold's ages.
 //   2. The category factor. Each category's mean log residual from the surface, shrunk
 //      toward zero (a multiplier of 1) with a prior of five protocols, then clamped to
 //      [0.25, 4]. A category with no priced protocol at all takes a multiplier of 1.
@@ -30,21 +38,31 @@
 //      the ratio of actual market cap to the model's prediction across the priced protocols,
 //      so half of the priced tokens land inside the band.
 //
-//   implied = 10^(intercept + tvl x log10(TVL) + age x log10(age+1) + growth x ln(1+change_7d))
-//             x category, rounded to whole dollars, with a floor of one dollar.
+//   implied = 10^(intercept + tvl x log10(TVL) + age x log10(age+1) + growth x ln(1+change_7d)
+//             + chains x log10(chains)) x category, rounded to whole dollars, with a floor
+//             of one dollar.
 //
 // The page also carries a five-fold cross-check: the surface is refitted on four fifths of
 // the priced protocols and tested on the fifth, five times, and the median absolute error
 // and the share of predictions within 2x are reported as the model's own report card. The
 // cross-check is out-of-sample, so it is the honest number; the in-sample fit would flatter
-// the model.
+// the model. The cross-check tests on the model's own comparables, as radar-4's did; the
+// README states the same comparison on a fixed test set too, so the two models are judged
+// on identical protocols.
 //
-// Measured on this snapshot (2026-11-14): 98 comparables after the outlier trim; the
-// surface is log10(mcap) = 2.70 + 0.64 x log10(TVL) - 0.15 x log10(age+1) + 0.75 x
-// ln(1+change_7d), R2 0.356. Age enters negative — the longer a protocol has gone with no
-// token, the less the market pays per dollar of TVL — and growth enters positive: a rising
-// TVL is worth more than a flat one. The fit is still a rough guide, which is why every
-// row shows its range, not just its centre.
+// Measured on this snapshot (2026-11-14): 96 comparables after the outlier trim; the
+// surface is log10(mcap) = 2.73 + 0.61 x log10(TVL) - 0.04 x log10(age+1) + 0.86 x
+// ln(1+change_7d) - 0.11 x log10(chains), R2 0.358, with unknown ages imputed at the
+// comparables' median of 1,018.5 days. Age enters near zero now — the one-year guess it
+// replaced had been inflating the age effect — growth enters positive, and chain breadth
+// enters negative: TVL spread thin across many chains prices lower per dollar than TVL
+// concentrated on one. The five-fold report card is a median error of 72.1% with 40.6%
+// within 2x; on the same 98 protocols radar-4 was tested on, the figures are 74.0% and
+// 39.8% against radar-4's 78.2% and 34.7%. The fit is still a rough guide, which is why
+// every row shows its range, not just its centre. Five of the top ten are risk curators,
+// as they were under radar-4: the five largest pre-token treasuries are risk curators,
+// and the category's factor is only 1.36x from a single priced protocol — the ranking
+// follows the TVL, not the factor, and no honest shrinkage moves it.
 
 /** One protocol entry: exactly the ten fields the sealed snapshot carries. */
 export interface SnapshotProtocol {
@@ -84,20 +102,20 @@ export interface ModelConstants {
 }
 
 export const MODEL: ModelConstants = {
-  trim_lo: 0.02,
-  trim_hi: 10,
+  trim_lo: 0.03,
+  trim_hi: 7,
   shrink_prior: 5,
   multiple_min: 0.25,
   multiple_max: 4,
   unknown_age_days: 365,
   growth_floor: -60,
-  growth_cap: 120,
+  growth_cap: 60,
   band_quantile: 0.25,
   backtest_folds: 5,
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -109,14 +127,17 @@ export interface FarmStep {
   time: string;
 }
 
-/** The fitted surface: log10(market cap) on log10(TVL), log10(age+1) and 7-day change. */
+/** The fitted surface: log10(market cap) on log10(TVL), log10(age+1), 7-day change and chain breadth. */
 export interface CurveFit {
   intercept: number;
   elasticity: number;
   age_coef: number;
   growth_coef: number;
+  chains_coef: number;
   mean_log_tvl: number;
   mean_log_age: number;
+  mean_log_chains: number;
+  age_imputed_days: number;
   r2: number;
   n: number;
   residual_sd: number;
@@ -182,6 +203,7 @@ export interface BoardRow {
     category_multiplier: number;
     age_multiplier: number;
     growth_multiplier: number;
+    chains_multiplier: number;
     multiple: number;
     age_days: number | null;
   };
@@ -215,6 +237,7 @@ export interface RadarRow {
   category_multiplier: number;
   age_multiplier: number;
   growth_multiplier: number;
+  chains_multiplier: number;
   farm_ticket_usd: number;
   setup_minutes: number;
   hold_days: number;
@@ -363,9 +386,30 @@ export function olsMulti(rows: number[][], ys: number[]): number[] {
   return solveLinear(xtx, xty);
 }
 
-/** A protocol's age feature: log10(age in days + 1), one year when the listing date is unknown. */
-export function logAgeOf(age: number | null, model: ModelConstants = MODEL): number {
-  return Math.log10((age ?? model.unknown_age_days) + 1);
+/** A protocol's age feature: log10(age in days + 1), the fit's imputed age when the listing date is unknown. */
+export function logAgeOf(age: number | null, imputedDays: number): number {
+  return Math.log10((age ?? imputedDays) + 1);
+}
+
+/** A protocol's chain-breadth feature: log10 of the chains it names, at least one. */
+export function logChainsOf(p: SnapshotProtocol): number {
+  return Math.log10(Math.max(1, p.chains.length));
+}
+
+/**
+ * The age to impute for a protocol with no listing date: the median known age among the
+ * protocols the fit learns from. A fixed guess would sit far from the typical protocol —
+ * on this snapshot the median known age is about three years, not one — and the median
+ * is computed from the fit's own set on every run, so a fold's imputation never leaks
+ * the held-out fold's ages. When no protocol in the set carries a date at all, the
+ * model's fallback applies.
+ */
+export function medianKnownAge(live: SnapshotProtocol[], asOf: string, model: ModelConstants = MODEL): number {
+  const known = live
+    .map((p) => ageDays(asOf, p.listed_at))
+    .filter((a): a is number => a !== null)
+    .sort((a, b) => a - b);
+  return medianOf(known) ?? model.unknown_age_days;
 }
 
 /** A protocol's growth feature: log(1 + growth), because growth is multiplicative. */
@@ -373,9 +417,9 @@ export function growthOf(change7d: number | null, model: ModelConstants = MODEL)
   return Math.log1p(clamp(finite(change7d, 0), model.growth_floor, model.growth_cap) / 100);
 }
 
-/** One protocol's three features, in the order the fit reads them. */
-export function featuresOf(p: SnapshotProtocol, asOf: string, model: ModelConstants = MODEL): [number, number, number] {
-  return [Math.log10(p.tvl_usd), logAgeOf(ageDays(asOf, p.listed_at), model), growthOf(p.change_7d, model)];
+/** One protocol's four features, in the order the fit reads them. */
+export function featuresOf(p: SnapshotProtocol, asOf: string, ageImputedDays: number, model: ModelConstants = MODEL): [number, number, number, number] {
+  return [Math.log10(p.tvl_usd), logAgeOf(ageDays(asOf, p.listed_at), ageImputedDays), growthOf(p.change_7d, model), logChainsOf(p)];
 }
 
 /** One live protocol's market-cap / TVL ratio: what the market pays per dollar of TVL. */
@@ -386,8 +430,10 @@ function ratioOf(p: SnapshotProtocol): number {
 /**
  * The protocols the curve learns from: live-token, positive TVL, not an exchange token, and
  * with a market-cap / TVL ratio inside the model's trim. A token the market values at more
- * than ten times its TVL, or at less than two per cent of it, is an outlier the curve cannot
- * price; it is set aside and counted on the page, never silently dropped.
+ * than seven times its TVL, or at less than three per cent of it, is an outlier the curve
+ * cannot price; it is set aside and counted on the page, never silently dropped. The trim
+ * is set where the cross-check says it helps: wider, two collapsed-cap tokens drag the
+ * surface; tighter, the fit loses the protocols it needs.
  */
 export function calibrationSet(snapshot: Snapshot, model: ModelConstants = MODEL): SnapshotProtocol[] {
   return snapshot.protocols.filter(
@@ -413,7 +459,7 @@ export function outlierSet(snapshot: Snapshot, model: ModelConstants = MODEL): S
   );
 }
 
-/** The surface fitted on a set of priced protocols: log10(market cap) on TVL, age and growth. */
+/** The surface fitted on a set of priced protocols: log10(market cap) on TVL, age, growth and chain breadth. */
 export function fitCurve(
   live: SnapshotProtocol[],
   asOf: string,
@@ -423,35 +469,43 @@ export function fitCurve(
   elasticity: number;
   age_coef: number;
   growth_coef: number;
+  chains_coef: number;
   mean_log_tvl: number;
   mean_log_age: number;
+  mean_log_chains: number;
+  age_imputed_days: number;
   r2: number;
   n: number;
   residual_sd: number;
   residuals: number[];
 } {
-  const xs = live.map((p) => featuresOf(p, asOf, model));
+  const ageImputedDays = medianKnownAge(live, asOf, model);
+  const xs = live.map((p) => featuresOf(p, asOf, ageImputedDays, model));
   const ys = live.map((p) => Math.log10(p.mcap_usd!));
   const meanLogTvl = xs.reduce((s, x) => s + x[0], 0) / xs.length;
   const meanLogAge = xs.reduce((s, x) => s + x[1], 0) / xs.length;
+  const meanLogChains = xs.reduce((s, x) => s + x[3], 0) / xs.length;
   const beta = olsMulti(
-    xs.map((x) => [1, x[0], x[1], x[2]]),
+    xs.map((x) => [1, x[0], x[1], x[2], x[3]]),
     ys,
   );
   const n = live.length;
-  const residuals = ys.map((y, i) => y - (beta[0]! + beta[1]! * xs[i]![0] + beta[2]! * xs[i]![1] + beta[3]! * xs[i]![2]));
+  const residuals = ys.map((y, i) => y - (beta[0]! + beta[1]! * xs[i]![0] + beta[2]! * xs[i]![1] + beta[3]! * xs[i]![2] + beta[4]! * xs[i]![3]));
   const my = ys.reduce((a, b) => a + b, 0) / n;
   const ssTot = ys.reduce((s, y) => s + (y - my) * (y - my), 0);
   const ssRes = residuals.reduce((s, r) => s + r * r, 0);
   const r2 = ssTot === 0 ? 0 : 1 - ssRes / ssTot;
-  const residualSd = n > 4 ? Math.sqrt(ssRes / (n - 4)) : 0;
+  const residualSd = n > 5 ? Math.sqrt(ssRes / (n - 5)) : 0;
   return {
     intercept: beta[0]!,
     elasticity: beta[1]!,
     age_coef: beta[2]!,
     growth_coef: beta[3]!,
+    chains_coef: beta[4]!,
     mean_log_tvl: meanLogTvl,
     mean_log_age: meanLogAge,
+    mean_log_chains: meanLogChains,
+    age_imputed_days: ageImputedDays,
     r2,
     n,
     residual_sd: residualSd,
@@ -502,7 +556,7 @@ export function categoryFactors(live: SnapshotProtocol[], fit: { residuals: numb
 
 /** The fitted surface plus the category factors it was fitted with: everything predict needs. */
 export interface ModelContext {
-  fit: { intercept: number; elasticity: number; age_coef: number; growth_coef: number; mean_log_age: number };
+  fit: { intercept: number; elasticity: number; age_coef: number; growth_coef: number; chains_coef: number; mean_log_age: number; mean_log_chains: number; age_imputed_days: number };
   factors: Map<string, { n: number; mean: number }>;
   asOf: string;
 }
@@ -511,7 +565,7 @@ export interface ModelContext {
 export function buildContext(live: SnapshotProtocol[], asOf: string, model: ModelConstants = MODEL): ModelContext {
   const fit = fitCurve(live, asOf, model);
   return {
-    fit: { intercept: fit.intercept, elasticity: fit.elasticity, age_coef: fit.age_coef, growth_coef: fit.growth_coef, mean_log_age: fit.mean_log_age },
+    fit: { intercept: fit.intercept, elasticity: fit.elasticity, age_coef: fit.age_coef, growth_coef: fit.growth_coef, chains_coef: fit.chains_coef, mean_log_age: fit.mean_log_age, mean_log_chains: fit.mean_log_chains, age_imputed_days: fit.age_imputed_days },
     factors: residualsByCategory(live, fit.residuals),
     asOf,
   };
@@ -529,21 +583,23 @@ export function impliedValue(
   protocol: SnapshotProtocol,
   ctx: ModelContext,
   model: ModelConstants = MODEL,
-): { implied: number; fitValue: number; categoryMultiplier: number; ageMultiplier: number; growthMultiplier: number; multiple: number; age: number | null } {
+): { implied: number; fitValue: number; categoryMultiplier: number; ageMultiplier: number; growthMultiplier: number; chainsMultiplier: number; multiple: number; age: number | null } {
   const age = ageDays(ctx.asOf, protocol.listed_at);
   const logTvl = Math.log10(protocol.tvl_usd);
-  const logAge = logAgeOf(age, model);
+  const logAge = logAgeOf(age, ctx.fit.age_imputed_days);
   const growth = growthOf(protocol.change_7d, model);
-  // The curve value is the surface at this TVL, at the comparables' mean age and zero
-  // growth; the age and growth factors are the fitted moves away from that centre, so
-  // each reads 1.0 for a typical protocol and their product with the curve value is
-  // exactly the fitted surface.
-  const fitValue = Math.pow(10, ctx.fit.intercept + ctx.fit.elasticity * logTvl + ctx.fit.age_coef * ctx.fit.mean_log_age);
+  const logChains = logChainsOf(protocol);
+  // The curve value is the surface at this TVL, at the comparables' mean age, mean chain
+  // breadth and zero growth; the age, growth and chains factors are the fitted moves away
+  // from that centre, so each reads 1.0 for a typical protocol and their product with the
+  // curve value is exactly the fitted surface.
+  const fitValue = Math.pow(10, ctx.fit.intercept + ctx.fit.elasticity * logTvl + ctx.fit.age_coef * ctx.fit.mean_log_age + ctx.fit.chains_coef * ctx.fit.mean_log_chains);
   const ageMultiplier = Math.pow(10, ctx.fit.age_coef * (logAge - ctx.fit.mean_log_age));
   const growthMultiplier = Math.pow(10, ctx.fit.growth_coef * growth);
+  const chainsMultiplier = Math.pow(10, ctx.fit.chains_coef * (logChains - ctx.fit.mean_log_chains));
   const categoryMultiplier = multiplierFor(protocol.category, ctx, model);
-  const implied = Math.max(1, Math.round(fitValue * ageMultiplier * growthMultiplier * categoryMultiplier));
-  return { implied, fitValue, categoryMultiplier, ageMultiplier, growthMultiplier, multiple: implied / protocol.tvl_usd, age };
+  const implied = Math.max(1, Math.round(fitValue * ageMultiplier * growthMultiplier * chainsMultiplier * categoryMultiplier));
+  return { implied, fitValue, categoryMultiplier, ageMultiplier, growthMultiplier, chainsMultiplier, multiple: implied / protocol.tvl_usd, age };
 }
 
 /**
@@ -707,6 +763,7 @@ function toBoardRow(s: ScoredProtocol, i: number): BoardRow {
       category_multiplier: round4(s.categoryMultiplier),
       age_multiplier: round4(s.ageMultiplier),
       growth_multiplier: round4(s.growthMultiplier),
+      chains_multiplier: round4(s.chainsMultiplier),
       multiple: round4(s.multiple),
       age_days: s.age,
     },
@@ -756,19 +813,22 @@ export function compareGap(first: number, second: number): number {
 /**
  * Two board rows side by side: every factor the model scores, in the order the detail
  * drawer shows them, ending with the implied values themselves. A missing growth
- * reading counts as zero and a missing age counts as a year, the same fallbacks the
- * scorer uses, so a comparison never disagrees with a detail view. The dashboard
- * mirrors this list in its own code for the rows it renders.
+ * reading counts as zero and a missing age counts as a year for display, the same
+ * fallbacks the scorer uses for the comparison table; the fit itself imputes the
+ * comparables' median age, which the detail view states. The dashboard mirrors this
+ * list in its own code for the rows it renders.
  */
 export function compareBoardRows(first: BoardRow, second: BoardRow): CompareEntry[] {
   return [
     { key: 'tvl', label: 'Total value locked', first: first.tvl_usd, second: second.tvl_usd },
     { key: 'growth', label: 'Seven-day TVL change', first: first.change_7d ?? 0, second: second.change_7d ?? 0 },
     { key: 'age', label: 'Days with no token on record', first: first.age_days ?? 365, second: second.age_days ?? 365 },
+    { key: 'chains', label: 'Chains the protocol names', first: first.chains.length, second: second.chains.length },
     { key: 'fit', label: 'Curve value', first: first.model.fit_value, second: second.model.fit_value },
     { key: 'categoryMult', label: 'Category multiplier', first: first.model.category_multiplier, second: second.model.category_multiplier },
     { key: 'ageMult', label: 'Age multiplier', first: first.model.age_multiplier, second: second.model.age_multiplier },
     { key: 'growthMult', label: 'Growth multiplier', first: first.model.growth_multiplier, second: second.model.growth_multiplier },
+    { key: 'chainsMult', label: 'Chain breadth multiplier', first: first.model.chains_multiplier, second: second.model.chains_multiplier },
     { key: 'implied', label: 'Implied value', first: first.implied_value_usd, second: second.implied_value_usd },
   ];
 }
@@ -1019,6 +1079,7 @@ export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
     category_multiplier: row.model.category_multiplier,
     age_multiplier: row.model.age_multiplier,
     growth_multiplier: row.model.growth_multiplier,
+    chains_multiplier: row.model.chains_multiplier,
     farm_ticket_usd: row.farm.ticket_usd,
     setup_minutes: row.farm.setup_minutes,
     hold_days: row.farm.hold_days,
@@ -1058,8 +1119,11 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       elasticity: fit.elasticity,
       age_coef: fit.age_coef,
       growth_coef: fit.growth_coef,
+      chains_coef: fit.chains_coef,
       mean_log_tvl: fit.mean_log_tvl,
       mean_log_age: fit.mean_log_age,
+      mean_log_chains: fit.mean_log_chains,
+      age_imputed_days: fit.age_imputed_days,
       r2: fit.r2,
       n: fit.n,
       residual_sd: fit.residual_sd,
